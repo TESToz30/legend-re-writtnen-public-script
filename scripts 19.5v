@@ -512,7 +512,32 @@ farmLoop = function()
     startFloat()
     startNoclip()
     while Farm.on do
-        local mob = findMob()
+        -- Check if any specific mob is selected in the dropdown
+        local anySelected = false
+        for _, v in pairs(SelectedMobs) do if v then anySelected = true break end end
+
+        local mob
+        if not anySelected then
+            -- Nothing selected: tween to whatever alive mob is nearest, no name filter
+            local h = getHumanoidRootPart()
+            local f = workspace:FindFirstChild("Mobs")
+            if h and f then
+                local best, bd = nil, math.huge
+                for _, m in ipairs(f:GetChildren()) do
+                    if m:IsA("Model") and isAlive(m) then
+                        local r = getRootPart(m)
+                        if r then
+                            local d = (h.Position - r.Position).Magnitude
+                            if d < bd then bd = d best = m end
+                        end
+                    end
+                end
+                mob = best
+            end
+        else
+            mob = findMob()
+        end
+
         if not mob then task.wait(COMBAT_CONFIG.Retry) continue end
         Farm.mob = mob
         tweenTo(mob)
@@ -523,11 +548,11 @@ farmLoop = function()
             task.wait(COMBAT_CONFIG.Poll)
         end
         if not Farm.on then break end
-        -- Check AutoRejoin: did this mob match any selected trigger?
+        -- Check AutoRejoin trigger
         if AutoRejoin.on and mob then
-            local anySelected = false
-            for _, v in pairs(AutoRejoin.mobs) do if v then anySelected = true break end end
-            local matches = (not anySelected) or (AutoRejoin.mobs[mob.Name] == true)
+            local anyTrigger = false
+            for _, v in pairs(AutoRejoin.mobs) do if v then anyTrigger = true break end end
+            local matches = (not anyTrigger) or (AutoRejoin.mobs[mob.Name] == true)
             if matches then
                 Farm.mob = nil
                 Farm.on = false
@@ -3052,7 +3077,7 @@ local dg, ds, sp = false, nil, nil
 TB.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dg = true ds = i.Position sp = Main.Position end end)
 TB.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dg = false end end)
 UserInputService.InputChanged:Connect(function(i) if dg and i.UserInputType == Enum.UserInputType.MouseMovement then local d = i.Position - ds Main.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y) ePos = Main.Position end end)
-
+ 
 -- =====================================================
 -- RESPAWN / AUTO REJOIN
 -- =====================================================
