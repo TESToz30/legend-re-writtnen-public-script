@@ -1226,13 +1226,11 @@ harvestLoop = function()
             if not d.m or not d.m.Parent then continue end
             h = getHumanoidRootPart()
             if not h then break end
-            if not NodePull.on then
-                local dist = (h.Position - d.p.Position).Magnitude
-                if dist > 6 then
-                    local tw = TS:Create(h, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.05, 3), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(d.p.Position + Vector3.new(0, 3, 0)) })
-                    tw:Play()
-                    tw.Completed:Wait()
-                end
+            local dist = (h.Position - d.p.Position).Magnitude
+            if dist > 6 then
+                local tw = TS:Create(h, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.05, 3), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(d.p.Position + Vector3.new(0, 3, 0)) })
+                tw:Play()
+                tw.Completed:Wait()
             end
             if not Harvest.on then break end
             Harvest.current = d.d
