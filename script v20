@@ -3,7 +3,7 @@
 -- =====================================================
 
 -- Wait for game to fully load (autoexec runs before Roblox is ready)
-repeat task.wait(2.2) until game:IsLoaded()
+repeat task.wait(0.1) until game:IsLoaded()
 
 local Players = game:GetService("Players")
 
@@ -541,6 +541,24 @@ end
 -- =====================================================
 farmLoop = function()
     Farm.on = true
+    -- Wait until the world Mobs folder exists (may still be in lobby after rejoin)
+    local waitStart = tick()
+    while Farm.on and not workspace:FindFirstChild("Mobs") and tick() - waitStart < 60 do
+        task.wait(1)
+    end
+    if not Farm.on or not workspace:FindFirstChild("Mobs") then
+        Farm.on = false
+        return
+    end
+    -- Also wait for HumanoidRootPart to be ready
+    local waitStart2 = tick()
+    while Farm.on and not getHumanoidRootPart() and tick() - waitStart2 < 15 do
+        task.wait(0.5)
+    end
+    if not Farm.on or not getHumanoidRootPart() then
+        Farm.on = false
+        return
+    end
     startFloat()
     startNoclip()
     while Farm.on do
@@ -2210,7 +2228,7 @@ do
     end, C.GOLD)
     if _G.VS_P_AUTO and Presets[_G.VS_P_AUTO] then
         local pn = _G.VS_P_AUTO local pd = Presets[pn]
-        task.spawn(function() task.wait(3) pcall(applyPreset, pd) print("[VS] Auto-loaded: " .. pn) end)
+        task.spawn(function() task.wait(8) pcall(applyPreset, pd) end)
     end
 end
 
