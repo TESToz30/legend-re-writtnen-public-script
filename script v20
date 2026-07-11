@@ -2066,6 +2066,18 @@ do
     mkBtn(DT, "Reset Door Cycle", function() doorCycle.list = nil doorCycle.visited = {} end, C.PURP)
     mkBtn(DT, "Teleport to Nearest Chest", function() local d = nearestObj(CHEST_NAMES) if d then dungMoveTo(d.part) end end, C.GOLD)
     mkBtn(DT, "Teleport to Exit", function() local d = nearestObj(EXIT_NAMES) if d then dungMoveTo(d.part) end end, C.GREEN)
+    mkSec(DT, "DUNGEON ENTRY")
+    local DUNGEON_CIRCLE = Vector3.new(3727.236, -409.427, 6893.814)
+    local function joinDungeonCircle()
+        local hrp = getHumanoidRootPart()
+        if not hrp then return end
+        -- Tween to the circle — server detects the touch and teleports automatically
+        local dist = (hrp.Position - DUNGEON_CIRCLE).Magnitude
+        local tw = TS:Create(hrp, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.1, 6), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(DUNGEON_CIRCLE) })
+        tw:Play()
+        tw.Completed:Wait()
+    end
+    mkBtn(DT, "Join Dungeon Now", function() task.spawn(joinDungeonCircle) end, C.PURP)
     mkSec(DT, "AUTOMATION")
     mkFarmToggle(DT, "Start Auto Chest", "Stop Auto Chest",
         function() return Dungeon.autoChest.on end,
