@@ -677,6 +677,26 @@ function gateFarmLoop()
             task.wait(1)
             continue
         end
+        local function killMob(mob)
+            if not mob or not mob.Parent or not isAlive(mob) then return end
+            Gate.farmMob = mob
+            local h2 = getHumanoidRootPart()
+            if not h2 then Gate.farmMob = nil return end
+            local r = getRootPart(mob)
+            if r and (h2.Position - r.Position).Magnitude > HOVER + COMBAT_CONFIG.Range then
+                local tp2 = r.Position + Vector3.new(0, HOVER, 0)
+                local dd = (h2.Position - tp2).Magnitude
+                local tw = TS:Create(h2, TweenInfo.new(math.clamp(dd / MOVEMENT_CONFIG.Speed, 0.05, 2), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(tp2) })
+                tw:Play()
+                tw.Completed:Wait()
+            end
+            while Gate.farmOn and mob and mob.Parent and isAlive(mob) do
+                hoverAbove(mob, COMBAT_CONFIG.Poll)
+                attackMob(mob)
+                task.wait(COMBAT_CONFIG.Poll)
+            end
+            Gate.farmMob = nil
+        end
         for _, center in ipairs(centers) do
             if not Gate.farmOn then break end
             local h = getHumanoidRootPart()
@@ -688,9 +708,9 @@ function gateFarmLoop()
                 tw:Play()
                 tw.Completed:Wait()
             end
-            local clearStart = tick()
-            while Gate.farmOn and tick() - clearStart < 60 do
-                local mobs = mobsNearPos(center.pos, 150)
+            -- Kill all mobs near this center — no timeout, only exits when all dead
+            while Gate.farmOn do
+                local mobs = mobsNearPos(center.pos, 400)
                 if #mobs == 0 then break end
                 local h2 = getHumanoidRootPart()
                 if not h2 then break end
@@ -702,22 +722,29 @@ function gateFarmLoop()
                         if dd < bd then bd = dd best = m end
                     end
                 end
-                if not best then break end
-                Gate.farmMob = best
-                local r = getRootPart(best)
-                if r and (h2.Position - r.Position).Magnitude > HOVER + COMBAT_CONFIG.Range then
-                    local tp2 = r.Position + Vector3.new(0, HOVER, 0)
-                    local dd = (h2.Position - tp2).Magnitude
-                    local tw = TS:Create(h2, TweenInfo.new(math.clamp(dd / MOVEMENT_CONFIG.Speed, 0.05, 2), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(tp2) })
-                    tw:Play()
-                    tw.Completed:Wait()
+                killMob(best)
+            end
+        end
+        -- Final straggler sweep — kill any remaining mobs in workspace.Mobs
+        if Gate.farmOn then
+            local f = workspace:FindFirstChild("Mobs")
+            if f then
+                while Gate.farmOn do
+                    local h2 = getHumanoidRootPart()
+                    if not h2 then break end
+                    local best, bd = nil, math.huge
+                    for _, m in ipairs(f:GetChildren()) do
+                        if m:IsA("Model") and isAlive(m) then
+                            local r = getRootPart(m)
+                            if r then
+                                local dd = (h2.Position - r.Position).Magnitude
+                                if dd < bd then bd = dd best = m end
+                            end
+                        end
+                    end
+                    if not best then break end
+                    killMob(best)
                 end
-                while Gate.farmOn and best and best.Parent and isAlive(best) do
-                    hoverAbove(best, COMBAT_CONFIG.Poll)
-                    attackMob(best)
-                    task.wait(COMBAT_CONFIG.Poll)
-                end
-                Gate.farmMob = nil
             end
         end
         task.wait(2)
@@ -818,6 +845,23 @@ function stopTh(k)
     if threads[k] then task.cancel(threads[k]) threads[k] = nil end
     if conns[k] then conns[k]:Disconnect() conns[k] = nil end
 end
+local function pressKey(keyCode)
+    pcall(function()
+        game:GetService("VirtualInputManager"):SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.05)
+        game:GetService("VirtualInputManager"):SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+local function m1Click(tp)
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        local cam = workspace.CurrentCamera
+        local sp = cam:WorldToScreenPoint(tp)
+        vu:Button1Down(Vector2.new(sp.X, sp.Y), cam.CFrame)
+        task.wait(0.05)
+        vu:Button1Up(Vector2.new(sp.X, sp.Y), cam.CFrame)
+    end)
+end
 function startAutoAbility()
     stopTh("ab")
     Character.autoAbility = true
@@ -827,29 +871,14 @@ function startAutoAbility()
             local mob = Farm.mob or Gate.farmMob
             if mob then
                 local r = getRootPart(mob)
-                if r then tp = r.Position aimAt(tp) end
+                if r then tp = r.Position end
             end
-            if tp and ChargeR then
-                pcall(function() ChargeR:FireServer(tp.X, tp.Y, tp.Z) end)
-                task.wait(CHARACTER_CONFIG.AbilityDelay)
-            end
-            for _, k in ipairs({ Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three }) do
+            for _, k in ipairs({ Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Six }) do
                 if not Character.autoAbility then break end
                 if tp then aimAt(tp) end
-                pcall(function()
-                    game:GetService("VirtualInputManager"):SendKeyEvent(true, k, false, game)
-                    task.wait(0.05)
-                    game:GetService("VirtualInputManager"):SendKeyEvent(false, k, false, game)
-                end)
-                task.wait(CHARACTER_CONFIG.AbilityDelay)
-            end
-            if Character.autoAbility then
-                if tp then aimAt(tp) end
-                pcall(function()
-                    game:GetService("VirtualInputManager"):SendKeyEvent(true, Enum.KeyCode.Six, false, game)
-                    task.wait(0.05)
-                    game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.Six, false, game)
-                end)
+                pressKey(k)
+                task.wait(0.05)
+                if tp then m1Click(tp) end
                 task.wait(CHARACTER_CONFIG.AbilityDelay)
             end
         end
@@ -858,6 +887,30 @@ end
 function stopAutoAbility()
     Character.autoAbility = false
     stopTh("ab")
+end
+
+-- =====================================================
+-- INVISIBILITY
+-- =====================================================
+local Invisible = { on = false, originals = {} }
+function setInvisible(val)
+    Invisible.on = val
+    local char = LocalPlayer.Character
+    if not char then return end
+    if val then
+        Invisible.originals = {}
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") or part:IsA("Decal") then
+                Invisible.originals[part] = part.Transparency
+                part.Transparency = 1
+            end
+        end
+    else
+        for part, t in pairs(Invisible.originals) do
+            if part and part.Parent then part.Transparency = t end
+        end
+        Invisible.originals = {}
+    end
 end
 
 -- =====================================================
@@ -1239,7 +1292,7 @@ function getDoorObjects()
     return found
 end
 function groupDoors(doors, radius)
-    radius = radius or 20
+    radius = radius or 350
     local groups = {}
     local used = {}
     for i, d in ipairs(doors) do
@@ -1264,7 +1317,7 @@ end
 function teleportNextDoor()
     if not doorCycle.list or #doorCycle.list == 0 then
         local allDoors = getDoorObjects()
-        local groups = groupDoors(allDoors, 20)
+        local groups = groupDoors(allDoors, 350)
         doorCycle.list = {}
         for _, g in ipairs(groups) do
             local visited = false
@@ -1286,17 +1339,6 @@ function teleportNextDoor()
     local group = table.remove(doorCycle.list, 1)
     if not group then return end
     for _, d in ipairs(group.doors) do doorCycle.visited[d.obj] = true end
-    local hrp = getHumanoidRootPart()
-    if not hrp then return end
-    local tp = group.center + Vector3.new(0, DUNG_OFFSET, 0)
-    if Dungeon.instantTP then
-        hrp.CFrame = CFrame.new(tp)
-    else
-        local dist = (hrp.Position - tp).Magnitude
-        local tw = TS:Create(hrp, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.05, 4), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(tp) })
-        tw:Play()
-        tw.Completed:Wait()
-    end
     for _, d in ipairs(group.doors) do
         if d.part and d.part.Parent then
             dungMoveTo(d.part)
@@ -1305,7 +1347,6 @@ function teleportNextDoor()
         interactWith(d.obj)
         task.wait(0.25)
     end
-    print("[VS] Room cleared (" .. group.count .. " doors)  |  " .. #doorCycle.list .. " rooms left")
 end
 autoChestLoop = function()
     Dungeon.autoChest.on = true
@@ -1338,7 +1379,7 @@ autoDoorLoop = function()
     while Dungeon.autoDoor.on do
         if not doorCycle.list or #doorCycle.list == 0 then
             local allDoors = getDoorObjects()
-            local groups = groupDoors(allDoors, 20)
+            local groups = groupDoors(allDoors, 350)
             doorCycle.list = {}
             for _, g in ipairs(groups) do
                 local visited = false
@@ -1360,22 +1401,8 @@ autoDoorLoop = function()
         if not Dungeon.autoDoor.on then break end
         local group = table.remove(doorCycle.list, 1)
         if not group then task.wait(2) continue end
-        local hrp = getHumanoidRootPart()
-        if hrp then
-            local tp = group.center + Vector3.new(0, DUNG_OFFSET, 0)
-            if Dungeon.instantTP then
-                hrp.CFrame = CFrame.new(tp)
-            else
-                local dist = (hrp.Position - tp).Magnitude
-                local tw = TS:Create(hrp, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.05, 4), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(tp) })
-                tw:Play()
-                tw.Completed:Wait()
-            end
-        end
-        task.wait(0.3)
         for _, d in ipairs(group.doors) do
             if not Dungeon.autoDoor.on then break end
-            -- Move to THIS door individually so interaction always fires in range
             if d.part and d.part.Parent then
                 dungMoveTo(d.part)
                 task.wait(0.15)
@@ -1384,7 +1411,6 @@ autoDoorLoop = function()
             task.wait(0.25)
         end
         for _, d in ipairs(group.doors) do doorCycle.visited[d.obj] = true end
-        print("[VS] Room cleared (" .. group.count .. " doors)  |  " .. #doorCycle.list .. " rooms left")
         task.wait(1)
     end
     Dungeon.autoDoor.on = false
@@ -1798,6 +1824,10 @@ do
     mkSlider(CT, "Stamina Threshold", 10, 90, 30, C.GREEN, function(val)
         AutoPotion.stam.threshold = val / 100
     end)
+    mkSec(CT, "INVISIBILITY")
+    ToggleSetters.invisible = mkToggle(CT, "Invisibility", false, function(v)
+        setInvisible(v)
+    end, "invisible")
     mkSec(CT, "INTERACTION")
     ToggleSetters.instaPrompt = mkToggle(CT, "Instant Proximity Prompt", false, function(v)
         if v then startInstaPrompt() else stopInstaPrompt() end
@@ -3145,6 +3175,7 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     if Farm.on then Farm.on = false task.wait(3) task.spawn(farmLoop) end
     setupDiedListener(char)
     if AutoRejoin.on then task.spawn(autoSelectWorld) end
+    if Invisible.on then task.wait(0.5) setInvisible(true) end
 end)
 
 print("[Void Stars] v5 Loaded — Farm | ESP | Char | Gates | Mine | Harvest | Dungeon | Raids | Misc | Trade")
