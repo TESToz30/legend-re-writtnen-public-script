@@ -48,7 +48,7 @@ local bindingMode = {}
 local hkRefs = {}
 local hkActions = {}
 local ToggleSetters = {}
-local Dungeon = { doorESP = false, exitESP = false, chestESP = false, mobESP = false, trapESP = false, autoChest = { on = false, thread = nil }, autoDoor = { on = false, thread = nil } }
+local Dungeon = { doorESP = false, exitESP = false, chestESP = false, mobESP = false, trapESP = false, autoChest = { on = false, thread = nil }, autoDoor = { on = false, thread = nil }, autoDieOnClear = false }
 local stamConn = nil
 local mineRemote = nil
 local noclipConn = nil
@@ -1378,7 +1378,17 @@ autoChestLoop = function()
             local part = obj:IsA("BasePart") and obj or (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart"))
             if part then table.insert(chests, { obj = obj, part = part, dist = (hrp.Position - part.Position).Magnitude }) end
         end
-        if #chests == 0 then task.wait(2) continue end
+        if #chests == 0 then
+            -- No chests left — fire auto-die if enabled
+            if Dungeon.autoDieOnClear then
+                task.wait(0.5)
+                local char = LocalPlayer.Character
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                if hum then hum.Health = 0 end
+            end
+            task.wait(2)
+            continue
+        end
         table.sort(chests, function(a, b) return a.dist < b.dist end)
         for _, c in ipairs(chests) do
             if not Dungeon.autoChest.on then break end
@@ -2061,6 +2071,9 @@ do
         function() return Dungeon.autoChest.on end,
         function() Dungeon.autoChest.thread = task.spawn(autoChestLoop) end,
         function() Dungeon.autoChest.on = false if Dungeon.autoChest.thread then task.cancel(Dungeon.autoChest.thread) Dungeon.autoChest.thread = nil end end)
+    mkToggle(DT, "Auto Die After All Chests Looted", false, function(v)
+        Dungeon.autoDieOnClear = v
+    end)
     mkFarmToggle(DT, "Start Auto Door", "Stop Auto Door",
         function() return Dungeon.autoDoor.on end,
         function() Dungeon.autoDoor.thread = task.spawn(autoDoorLoop) end,
