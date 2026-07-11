@@ -39,6 +39,7 @@ local ESP = { players = false, mobs = false, playerColor = Color3.fromRGB(255, 2
 local Character = { autoAbility = false, infStam = false }
 local Gate = { on = false, thread = nil, rank = nil, gtype = nil, farmOn = false, farmMob = nil }
 local Mine = { on = false, thread = nil, current = nil, selected = {}, speed = 0.05 }
+local MobPull = { on = false, thread = nil }
 local Harvest = { on = false, thread = nil, current = nil, selected = {} }
 local Raid = { on = false, thread = nil, status = "Idle" }
 local AutoRejoin = { on = false, world = 1, linkCode = "", placeId = 6198225400, mobs = {} }
@@ -534,6 +535,37 @@ function findMob()
         end
     end
     return best
+end
+
+-- =====================================================
+-- MOB PULL
+-- =====================================================
+local function startMobPull()
+    if MobPull.thread then task.cancel(MobPull.thread) end
+    MobPull.on = true
+    MobPull.thread = task.spawn(function()
+        while MobPull.on do
+            local hrp = getHumanoidRootPart()
+            local f = workspace:FindFirstChild("Mobs")
+            if hrp and f then
+                for _, mob in ipairs(f:GetChildren()) do
+                    if mob:IsA("Model") and isAlive(mob) then
+                        local root = getRootPart(mob)
+                        if root then
+                            pcall(function()
+                                root.CFrame = hrp.CFrame * CFrame.new(0, 0, -3)
+                            end)
+                        end
+                    end
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+local function stopMobPull()
+    MobPull.on = false
+    if MobPull.thread then task.cancel(MobPull.thread) MobPull.thread = nil end
 end
 
 -- =====================================================
@@ -1750,6 +1782,9 @@ do
     mkSec(FT, "MOVEMENT")
     ToggleSetters.noclip = mkToggle(FT, "Noclip", false, function(v) if v then startNoclip() else stopNoclip() end end, "noclip")
     ToggleSetters.staticHover = mkToggle(FT, "Static Hover (no orbit)", false, function(v) Farm.staticHover = v end)
+    mkToggle(FT, "Pull Mobs To Me", false, function(v)
+        if v then startMobPull() else stopMobPull() end
+    end)
 
     mkSec(FT, "AUTO REJOIN PRIVATE SERVER")
     mkToggle(FT, "Enable Auto Rejoin on Kill", false, function(v)
