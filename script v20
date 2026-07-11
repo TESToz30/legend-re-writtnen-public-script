@@ -40,6 +40,7 @@ local Character = { autoAbility = false, infStam = false }
 local Gate = { on = false, thread = nil, rank = nil, gtype = nil, farmOn = false, farmMob = nil }
 local Mine = { on = false, thread = nil, current = nil, selected = {}, speed = 0.05 }
 local MobPull = { on = false, thread = nil }
+local NodePull = { on = false, thread = nil }
 local Harvest = { on = false, thread = nil, current = nil, selected = {} }
 local Raid = { on = false, thread = nil, status = "Idle" }
 local AutoRejoin = { on = false, world = 1, linkCode = "", placeId = 6198225400, mobs = {} }
@@ -535,6 +536,39 @@ function findMob()
         end
     end
     return best
+end
+
+-- =====================================================
+-- NODE PULL (plants + chests)
+-- =====================================================
+local function startNodePull()
+    if NodePull.thread then task.cancel(NodePull.thread) end
+    NodePull.on = true
+    NodePull.thread = task.spawn(function()
+        while NodePull.on do
+            local hrp = getHumanoidRootPart()
+            if hrp then
+                local folders = { workspace:FindFirstChild("Plants"), workspace:FindFirstChild("Chests") }
+                for _, folder in ipairs(folders) do
+                    if folder then
+                        for _, obj in ipairs(folder:GetChildren()) do
+                            local part = obj:IsA("BasePart") and obj or (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart"))
+                            if part then
+                                pcall(function()
+                                    part.CFrame = hrp.CFrame * CFrame.new(0, 0, -3)
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+local function stopNodePull()
+    NodePull.on = false
+    if NodePull.thread then task.cancel(NodePull.thread) NodePull.thread = nil end
 end
 
 -- =====================================================
@@ -1192,11 +1226,13 @@ harvestLoop = function()
             if not d.m or not d.m.Parent then continue end
             h = getHumanoidRootPart()
             if not h then break end
-            local dist = (h.Position - d.p.Position).Magnitude
-            if dist > 6 then
-                local tw = TS:Create(h, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.05, 3), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(d.p.Position + Vector3.new(0, 3, 0)) })
-                tw:Play()
-                tw.Completed:Wait()
+            if not NodePull.on then
+                local dist = (h.Position - d.p.Position).Magnitude
+                if dist > 6 then
+                    local tw = TS:Create(h, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.05, 3), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(d.p.Position + Vector3.new(0, 3, 0)) })
+                    tw:Play()
+                    tw.Completed:Wait()
+                end
             end
             if not Harvest.on then break end
             Harvest.current = d.d
@@ -1425,8 +1461,7 @@ autoChestLoop = function()
         for _, c in ipairs(chests) do
             if not Dungeon.autoChest.on then break end
             if not c.obj or not c.obj.Parent then continue end
-            dungMoveTo(c.part)
-            task.wait(0.2)
+            if not NodePull.on then dungMoveTo(c.part) task.wait(0.2) end
             interactWith(c.obj)
             task.wait(0.5)
         end
@@ -1915,7 +1950,7 @@ do
     ToggleSetters.hitbox = mkToggle(CT, "Expand Mob Hitboxes", false, function(v)
         if v then startHitbox() else stopHitbox() end
     end)
-    mkSlider(CT, "Hitbox Size", 1, 20, 4, C.RED, function(val)
+    mkSlider(CT, "Hitbox Size", 1, 600, 4, C.RED, function(val)
         Hitbox.size = val
         if Hitbox.on then applyHitboxes() end
     end)
@@ -2021,6 +2056,9 @@ do
         function() return Harvest.on end,
         function() Harvest.thread = task.spawn(harvestLoop) end,
         function() Harvest.on = false if Harvest.thread then task.cancel(Harvest.thread) Harvest.thread = nil end end)
+    mkToggle(HT, "Pull Chests & Plants To Me", false, function(v)
+        if v then startNodePull() else stopNodePull() end
+    end)
     mkSec(HT, "ITEM FILTER") mkDropdown(HT, "Select Items (all if none selected)", HARVEST_ITEMS, Harvest.selected)
 end
 
