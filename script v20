@@ -1239,7 +1239,7 @@ function getDoorObjects()
     return found
 end
 function groupDoors(doors, radius)
-    radius = radius or 350
+    radius = radius or 20
     local groups = {}
     local used = {}
     for i, d in ipairs(doors) do
@@ -1264,7 +1264,7 @@ end
 function teleportNextDoor()
     if not doorCycle.list or #doorCycle.list == 0 then
         local allDoors = getDoorObjects()
-        local groups = groupDoors(allDoors, 350)
+        local groups = groupDoors(allDoors, 20)
         doorCycle.list = {}
         for _, g in ipairs(groups) do
             local visited = false
@@ -1338,7 +1338,7 @@ autoDoorLoop = function()
     while Dungeon.autoDoor.on do
         if not doorCycle.list or #doorCycle.list == 0 then
             local allDoors = getDoorObjects()
-            local groups = groupDoors(allDoors, 350)
+            local groups = groupDoors(allDoors, 20)
             doorCycle.list = {}
             for _, g in ipairs(groups) do
                 local visited = false
