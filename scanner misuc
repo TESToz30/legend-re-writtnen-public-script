@@ -1,0 +1,95 @@
+-- =====================================================
+-- VOID STARS — REMOTE SPY
+-- Run this separately to see what remotes fire.
+-- Equip/unequip armor and check the output.
+-- =====================================================
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- Keywords to highlight in output (equip/buff related)
+local HIGHLIGHT = {
+    "equip", "armor", "buff", "magic", "stat", "wear",
+    "item", "gear", "damage", "boost", "effect", "apply"
+}
+
+local spyActive = true
+local fireCount = {}
+
+local function serialize(val, depth)
+    depth = depth or 0
+    if depth > 3 then return "..." end
+    local t = type(val)
+    if t == "string" then return '"' .. val:sub(1, 40) .. '"' end
+    if t == "number" or t == "boolean" then return tostring(val) end
+    if t == "table" then
+        local ok, enc = pcall(HttpService.JSONEncode, HttpService, val)
+        return ok and enc:sub(1, 80) or "{table}"
+    end
+    if typeof(val) == "Instance" then return val.ClassName .. '("' .. val.Name .. '")' end
+    if typeof(val) == "Vector3" then return string.format("V3(%.1f,%.1f,%.1f)", val.X, val.Y, val.Z) end
+    if typeof(val) == "Enum" or typeof(val) == "EnumItem" then return tostring(val) end
+    return tostring(val)
+end
+
+local function serializeArgs(args)
+    local parts = {}
+    for _, v in ipairs(args) do
+        table.insert(parts, serialize(v))
+    end
+    return table.concat(parts, ", ")
+end
+
+local function isHighlighted(name)
+    local lower = name:lower()
+    for _, kw in ipairs(HIGHLIGHT) do
+        if lower:find(kw) then return true end
+    end
+    return false
+end
+
+local function logRemote(kind, remote, args)
+    if not spyActive then return end
+    local name = remote.Name
+    fireCount[name] = (fireCount[name] or 0) + 1
+    local argStr = serializeArgs(args)
+    local prefix = isHighlighted(name) and "*** [MATCH] " or "[Remote] "
+    print(string.format("%s%s | %s | args: %s | fires: %d",
+        prefix, kind, name, argStr ~= "" and argStr or "(none)", fireCount[name]))
+end
+
+-- Hook RemoteEvent:FireServer
+local oldFireServer = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    if method == "FireServer" and self:IsA("RemoteEvent") then
+        local args = { ... }
+        task.spawn(logRemote, "FireServer", self, args)
+    elseif method == "InvokeServer" and self:IsA("RemoteFunction") then
+        local args = { ... }
+        task.spawn(logRemote, "InvokeServer", self, args)
+    end
+    return oldFireServer(self, ...)
+end)
+
+print("[RemoteSpy] Active — equip your armor and watch the output.")
+print("[RemoteSpy] *** MATCH lines = equip/buff/stat related remotes.")
+print("[RemoteSpy] To stop: set spyActive = false in console.")
+
+-- Print a summary of most-fired remotes every 15 seconds
+task.spawn(function()
+    while spyActive do
+        task.wait(15)
+        if not spyActive then break end
+        local sorted = {}
+        for name, count in pairs(fireCount) do
+            table.insert(sorted, { name = name, count = count })
+        end
+        table.sort(sorted, function(a, b) return a.count > b.count end)
+        print("\n[RemoteSpy] === 15s Summary ===")
+        for i = 1, math.min(10, #sorted) do
+            print(string.format("  %dx  %s", sorted[i].count, sorted[i].name))
+        end
+        print("[RemoteSpy] ===================\n")
+    end
+end)
