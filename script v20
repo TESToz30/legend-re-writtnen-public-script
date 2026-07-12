@@ -39,7 +39,6 @@ local ESP = { players = false, mobs = false, playerColor = Color3.fromRGB(255, 2
 local Character = { autoAbility = false, infStam = false }
 local Gate = { on = false, thread = nil, rank = nil, gtype = nil, farmOn = false, farmMob = nil }
 local Mine = { on = false, thread = nil, current = nil, selected = {}, speed = 0.05 }
-local MobPull = { on = false, thread = nil }
 local Harvest = { on = false, thread = nil, current = nil, selected = {} }
 local Raid = { on = false, thread = nil, status = "Idle" }
 local AutoRejoin = { on = false, world = 1, linkCode = "", placeId = 6198225400, mobs = {} }
@@ -538,36 +537,6 @@ function findMob()
 end
 
 
--- =====================================================
--- MOB PULL
--- =====================================================
-local function startMobPull()
-    if MobPull.thread then task.cancel(MobPull.thread) end
-    MobPull.on = true
-    MobPull.thread = task.spawn(function()
-        while MobPull.on do
-            local hrp = getHumanoidRootPart()
-            local f = workspace:FindFirstChild("Mobs")
-            if hrp and f then
-                for _, mob in ipairs(f:GetChildren()) do
-                    if mob:IsA("Model") and isAlive(mob) then
-                        local root = getRootPart(mob)
-                        if root then
-                            pcall(function()
-                                root.CFrame = hrp.CFrame * CFrame.new(0, 0, -3)
-                            end)
-                        end
-                    end
-                end
-            end
-            task.wait(0.1)
-        end
-    end)
-end
-local function stopMobPull()
-    MobPull.on = false
-    if MobPull.thread then task.cancel(MobPull.thread) MobPull.thread = nil end
-end
 
 -- =====================================================
 -- FARM LOOP
@@ -961,6 +930,68 @@ function setInvisible(val)
             if part and part.Parent then part.Transparency = t end
         end
         Invisible.originals = {}
+    end
+end
+
+-- =====================================================
+-- ANIMATION DISABLE
+-- =====================================================
+local BLOCKED_ANIM_IDS = {
+    "105738084715287",
+    "507777826",
+    "507767714",
+    "507765000",
+    "4771797650",
+    "507766951",
+    "507767968",
+    "2955382101",
+}
+local function isBlockedAnim(track)
+    local id = ""
+    pcall(function() id = tostring(track.Animation.AnimationId) end)
+    for _, blocked in ipairs(BLOCKED_ANIM_IDS) do
+        if id:find(blocked) then return true end
+    end
+    return false
+end
+local ClimbAnim = { on = false, conns = {} }
+local function clearClimbConns()
+    for _, c in ipairs(ClimbAnim.conns) do pcall(function() c:Disconnect() end) end
+    ClimbAnim.conns = {}
+end
+local function applyClimbDisable(char)
+    clearClimbConns()
+    if not ClimbAnim.on then return end
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not hum or not animator then return end
+    -- Stop blocked tracks the moment they play
+    local c1 = animator.AnimationPlayed:Connect(function(track)
+        if not ClimbAnim.on then return end
+        if isBlockedAnim(track) then track:Stop(0) end
+    end)
+    table.insert(ClimbAnim.conns, c1)
+    -- Also stop anything already playing
+    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+        if isBlockedAnim(track) then track:Stop(0) end
+    end
+end
+function setClimbAnimDisabled(val)
+    ClimbAnim.on = val
+    local char = LocalPlayer.Character
+    if val then
+        applyClimbDisable(char)
+    else
+        clearClimbConns()
+        -- Resume normal animations by reloading the animator
+        local char2 = LocalPlayer.Character
+        local hum = char2 and char2:FindFirstChildOfClass("Humanoid")
+        local animator = hum and hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                pcall(function() track:Stop(0) end)
+            end
+        end
     end
 end
 
@@ -1783,9 +1814,6 @@ do
     mkSec(FT, "MOVEMENT")
     ToggleSetters.noclip = mkToggle(FT, "Noclip", false, function(v) if v then startNoclip() else stopNoclip() end end, "noclip")
     ToggleSetters.staticHover = mkToggle(FT, "Static Hover (no orbit)", false, function(v) Farm.staticHover = v end)
-    mkToggle(FT, "Pull Mobs To Me", false, function(v)
-        if v then startMobPull() else stopMobPull() end
-    end)
 
     mkSec(FT, "AUTO REJOIN PRIVATE SERVER")
     mkToggle(FT, "Enable Auto Rejoin on Kill", false, function(v)
@@ -1892,6 +1920,10 @@ do
     ToggleSetters.invisible = mkToggle(CT, "Invisibility", false, function(v)
         setInvisible(v)
     end, "invisible")
+    mkSec(CT, "ANIMATIONS")
+    mkToggle(CT, "Disable All Animations", false, function(v)
+        setClimbAnimDisabled(v)
+    end)
     mkSec(CT, "INTERACTION")
     ToggleSetters.instaPrompt = mkToggle(CT, "Instant Proximity Prompt", false, function(v)
         if v then startInstaPrompt() else stopInstaPrompt() end
@@ -3255,6 +3287,7 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     setupDiedListener(char)
     if AutoRejoin.on then task.spawn(autoSelectWorld) end
     if Invisible.on then task.wait(0.5) setInvisible(true) end
+    if ClimbAnim.on then task.wait(0.5) applyClimbDisable(char) end
 end)
 
 print("[Void Stars] v5 Loaded — Farm | ESP | Char | Gates | Mine | Harvest | Dungeon | Raids | Misc | Trade")
