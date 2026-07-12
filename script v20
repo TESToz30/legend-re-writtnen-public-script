@@ -252,32 +252,32 @@ end
 -- NOCLIP  (FIX: duplicate stopNoclip removed — only one definition)
 -- =====================================================
 local climbConn = nil
+local lastNoclipHum = nil
 function startNoclip()
     if noclipConn then return end
     noclipConn = RunService.Stepped:Connect(function()
         local c = LocalPlayer.Character
-        if c then
-            for _, p in ipairs(c:GetDescendants()) do
-                if p:IsA("BasePart") then p.CanCollide = false end
-            end
+        if not c then return end
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
         end
-    end)
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if hum and hum ~= lastNoclipHum then
+            lastNoclipHum = hum
+            if climbConn then climbConn:Disconnect() end
+            hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
             climbConn = hum.StateChanged:Connect(function(_, new)
                 if new == Enum.HumanoidStateType.Climbing then
                     hum:ChangeState(Enum.HumanoidStateType.Running)
                 end
             end)
-            hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
         end
-    end
+    end)
 end
 function stopNoclip()
     if noclipConn then noclipConn:Disconnect() noclipConn = nil end
     if climbConn then climbConn:Disconnect() climbConn = nil end
+    lastNoclipHum = nil
     local char = LocalPlayer.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
@@ -2136,16 +2136,23 @@ do
     mkBtn(DT, "Teleport to Exit", function() local d = nearestObj(EXIT_NAMES) if d then dungMoveTo(d.part) end end, C.GREEN)
     mkSec(DT, "DUNGEON ENTRY")
     local DUNGEON_CIRCLE = Vector3.new(3727.236, -409.427, 6893.814)
+    local dungeonCount = 0
+    -- Counter display
+    local countFrame = Instance.new("Frame") countFrame.Size = UDim2.new(1, 0, 0, 36) countFrame.BackgroundColor3 = C.PANEL countFrame.BorderSizePixel = 0 countFrame.Parent = DT
+    Instance.new("UICorner", countFrame).CornerRadius = UDim.new(0, 2)
+    local countLbl = Instance.new("TextLabel") countLbl.Size = UDim2.new(1, -10, 1, 0) countLbl.Position = UDim2.new(0, 10, 0, 0) countLbl.BackgroundTransparency = 1 countLbl.Text = "Dungeons Joined: 0" countLbl.TextColor3 = C.TXT countLbl.TextSize = 12 countLbl.Font = Enum.Font.GothamBold countLbl.TextXAlignment = Enum.TextXAlignment.Left countLbl.Parent = countFrame
     local function joinDungeonCircle()
         local hrp = getHumanoidRootPart()
         if not hrp then return end
-        -- Tween to the circle — server detects the touch and teleports automatically
         local dist = (hrp.Position - DUNGEON_CIRCLE).Magnitude
         local tw = TS:Create(hrp, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.1, 6), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(DUNGEON_CIRCLE) })
         tw:Play()
         tw.Completed:Wait()
+        dungeonCount = dungeonCount + 1
+        countLbl.Text = "Dungeons Joined: " .. dungeonCount
     end
     mkBtn(DT, "Join Dungeon Now", function() task.spawn(joinDungeonCircle) end, C.PURP)
+    mkBtn(DT, "Reset Counter", function() dungeonCount = 0 countLbl.Text = "Dungeons Joined: 0" end, C.PURP)
     mkSec(DT, "AUTOMATION")
     mkFarmToggle(DT, "Start Auto Chest", "Stop Auto Chest",
         function() return Dungeon.autoChest.on end,
