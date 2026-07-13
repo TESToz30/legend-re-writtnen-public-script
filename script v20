@@ -99,6 +99,11 @@ function loadPresetsFile()
 end
 function captureState()
     local function cp(t) local o = {} for k, v in pairs(t) do o[k] = v end return o end
+    -- Serialize hotkeys as KeyCode name strings (Enum.KeyCode can't be JSON encoded directly)
+    local hkSave = {}
+    for k, kc in pairs(Hotkeys) do
+        pcall(function() hkSave[k] = kc.Name end)
+    end
     return {
         hover = HOVER, speed = MOVEMENT_CONFIG.Speed, octR = OCT_R,
         gRank = Gate.rank, gType = Gate.gtype,
@@ -106,6 +111,8 @@ function captureState()
         espP = ESP.players, espM = ESP.mobs,
         autoAb = Character.autoAbility, infStam = Character.infStam,
         vfx = VFX.on,
+        invisible = Invisible.on,
+        fly = Fly.on, flySpeed = Fly.speed,
         doorESP = Dungeon.doorESP, exitESP = Dungeon.exitESP,
         chestESP = Dungeon.chestESP, mobESP = Dungeon.mobESP, trapESP = Dungeon.trapESP,
         raidOn = Raid.on, farmOn = Farm.on, staticHover = Farm.staticHover,
@@ -114,6 +121,7 @@ function captureState()
         harvestOn = Harvest.on, selectedHarvest = cp(Harvest.selected),
         autoChest = Dungeon.autoChest.on, autoDoor = Dungeon.autoDoor.on,
         potionThreshold = autoPotionThreshold,
+        hotkeys = hkSave,
     }
 end
 function applyPreset(pr)
@@ -132,6 +140,25 @@ function applyPreset(pr)
     ss("autoAb", pr.autoAb) ss("infStam", pr.infStam) ss("vfx", pr.vfx)
     ss("doorESP", pr.doorESP) ss("exitESP", pr.exitESP) ss("chestESP", pr.chestESP)
     ss("mobESP", pr.mobESP) ss("trapESP", pr.trapESP)
+    ss("invisible", pr.invisible)
+    if pr.fly then ss("fly", pr.fly) end
+    if pr.flySpeed then Fly.speed = pr.flySpeed end
+    -- Restore hotkeys
+    if type(pr.hotkeys) == "table" then
+        for k, name in pairs(pr.hotkeys) do
+            pcall(function()
+                local kc = Enum.KeyCode[name]
+                if kc then
+                    Hotkeys[k] = kc
+                    local ref = hkRefs[k]
+                    if ref then
+                        ref.lbl.Text = name:sub(1, 2):upper()
+                        TS:Create(ref.btn, TweenInfo.new(0.1), { BackgroundColor3 = C.PURP }):Play()
+                    end
+                end
+            end)
+        end
+    end
     if pr.raidOn and not Raid.on and startUrukRaid then pcall(task.spawn, startUrukRaid) end
     if type(pr.selectedMobs) == "table" then for k in pairs(SelectedMobs) do SelectedMobs[k] = nil end for k, v in pairs(pr.selectedMobs) do SelectedMobs[k] = v end end
     if type(pr.selectedOres) == "table" then for k in pairs(Mine.selected) do Mine.selected[k] = nil end for k, v in pairs(pr.selectedOres) do Mine.selected[k] = v end end
@@ -1991,7 +2018,7 @@ do
         setInvisible(v)
     end, "invisible")
     mkSec(CT, "FLY")
-    mkToggle(CT, "Fly", false, function(v) setFly(v) end, "fly")
+    ToggleSetters.fly = mkToggle(CT, "Fly", false, function(v) setFly(v) end, "fly")
     mkSlider(CT, "Fly Speed", 10, 400, 80, C.ACNT, function(val) Fly.speed = val end)
     mkSec(CT, "ANIMATIONS")
     mkToggle(CT, "Disable All Animations", false, function(v)
@@ -2209,11 +2236,43 @@ do
     mkBtn(DT, "Teleport to Exit", function() local d = nearestObj(EXIT_NAMES) if d then dungMoveTo(d.part) end end, C.GREEN)
     mkSec(DT, "DUNGEON ENTRY")
     local DUNGEON_CIRCLE = Vector3.new(3727.236, -409.427, 6893.814)
-    local dungeonCount = 0
-    -- Counter display
-    local countFrame = Instance.new("Frame") countFrame.Size = UDim2.new(1, 0, 0, 36) countFrame.BackgroundColor3 = C.PANEL countFrame.BorderSizePixel = 0 countFrame.Parent = DT
-    Instance.new("UICorner", countFrame).CornerRadius = UDim.new(0, 2)
-    local countLbl = Instance.new("TextLabel") countLbl.Size = UDim2.new(1, -10, 1, 0) countLbl.Position = UDim2.new(0, 10, 0, 0) countLbl.BackgroundTransparency = 1 countLbl.Text = "Dungeons Joined: 0" countLbl.TextColor3 = C.TXT countLbl.TextSize = 12 countLbl.Font = Enum.Font.GothamBold countLbl.TextXAlignment = Enum.TextXAlignment.Left countLbl.Parent = countFrame
+    -- Load saved counts
+    local COUNTER_FILE = "vs5_counters.json"
+    local dungeonCount, chestCount = 0, 0
+    pcall(function()
+        local raw = readfile(COUNTER_FILE)
+        if raw and raw ~= "" then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, raw)
+            if ok and type(data) == "table" then
+                dungeonCount = data.dungeons or 0
+                chestCount = data.chests or 0
+            end
+        end
+    end)
+    local function saveCounters()
+        local ok, enc = pcall(HttpService.JSONEncode, HttpService, { dungeons = dungeonCount, chests = chestCount })
+        if ok then pcall(writefile, COUNTER_FILE, enc) end
+    end
+    -- Counter row: single panel, label shows count, left-click = +1, right-click = reset
+    local function mkCounterRow(parent, label, getCount, onAdd, onReset)
+        local f = Instance.new("Frame") f.Size = UDim2.new(1, 0, 0, 34) f.BackgroundColor3 = C.PANEL f.BorderSizePixel = 0 f.Parent = parent
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 2)
+        local strip = Instance.new("Frame") strip.Size = UDim2.new(0, 2, 1, 0) strip.BackgroundColor3 = C.ACNT strip.BackgroundTransparency = 0.3 strip.BorderSizePixel = 0 strip.Parent = f
+        local lbl = Instance.new("TextLabel") lbl.Size = UDim2.new(1, -10, 1, 0) lbl.Position = UDim2.new(0, 10, 0, 0) lbl.BackgroundTransparency = 1 lbl.TextColor3 = C.TXT lbl.TextSize = 11 lbl.Font = Enum.Font.GothamBold lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.Parent = f
+        local hint = Instance.new("TextLabel") hint.Size = UDim2.new(1, -10, 1, 0) hint.Position = UDim2.new(0, 10, 0, 0) hint.BackgroundTransparency = 1 hint.TextColor3 = C.SUB hint.TextSize = 9 hint.Font = Enum.Font.Gotham hint.TextXAlignment = Enum.TextXAlignment.Right hint.Text = "L-click +1 · R-click reset" hint.Parent = f
+        local btn = Instance.new("TextButton") btn.Size = UDim2.new(1, 0, 1, 0) btn.BackgroundTransparency = 1 btn.Text = "" btn.Parent = f
+        local function refresh() lbl.Text = label .. getCount() end
+        refresh()
+        btn.MouseButton1Click:Connect(function() onAdd() refresh() end)
+        btn.MouseButton2Click:Connect(function() onReset() refresh() end)
+        return lbl
+    end
+    local dungLbl = mkCounterRow(DT, "Dungeons: ", function() return dungeonCount end,
+        function() dungeonCount = dungeonCount + 1 saveCounters() end,
+        function() dungeonCount = 0 saveCounters() end)
+    local chestLbl = mkCounterRow(DT, "Chests: ", function() return chestCount end,
+        function() chestCount = chestCount + 1 saveCounters() end,
+        function() chestCount = 0 saveCounters() end)
     local function joinDungeonCircle()
         local hrp = getHumanoidRootPart()
         if not hrp then return end
@@ -2221,11 +2280,8 @@ do
         local tw = TS:Create(hrp, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.1, 6), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(DUNGEON_CIRCLE) })
         tw:Play()
         tw.Completed:Wait()
-        dungeonCount = dungeonCount + 1
-        countLbl.Text = "Dungeons Joined: " .. dungeonCount
     end
     mkBtn(DT, "Join Dungeon Now", function() task.spawn(joinDungeonCircle) end, C.PURP)
-    mkBtn(DT, "Reset Counter", function() dungeonCount = 0 countLbl.Text = "Dungeons Joined: 0" end, C.PURP)
     mkSec(DT, "AUTOMATION")
     mkFarmToggle(DT, "Start Auto Chest", "Stop Auto Chest",
         function() return Dungeon.autoChest.on end,
@@ -2399,6 +2455,68 @@ do
         saveFeedback.TextColor3 = C.GREEN saveFeedback.Text = "Saved: " .. n
         task.spawn(function() task.wait(3) saveFeedback.Text = "" end)
     end, C.GOLD)
+    -- =====================================================
+    mkSec(PT, "DROP TRACKER")
+    local DROP_FILE = "vs5_drops.json"
+    local dropDungeons = 0  -- mob attempt counter (manual)
+    local dropChestsT = 0   -- chest attempt counter (manual)
+    pcall(function()
+        local raw = readfile(DROP_FILE)
+        if raw and raw ~= "" then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, raw)
+            if ok and type(data) == "table" then
+                dropDungeons = data.dungeons or 0
+                dropChestsT = data.chests or 0
+            end
+        end
+    end)
+    local function saveDrops()
+        local ok, enc = pcall(HttpService.JSONEncode, HttpService, { dungeons = dropDungeons, chests = dropChestsT })
+        if ok then pcall(writefile, DROP_FILE, enc) end
+    end
+    -- Result panel — shows all three drop rates simultaneously
+    local dropResFrame = Instance.new("Frame") dropResFrame.Size = UDim2.new(1, 0, 0, 100) dropResFrame.BackgroundColor3 = C.PANEL dropResFrame.BorderSizePixel = 0 dropResFrame.Parent = PT
+    Instance.new("UICorner", dropResFrame).CornerRadius = UDim.new(0, 2)
+    local dropResLbl = Instance.new("TextLabel") dropResLbl.Size = UDim2.new(1, -16, 1, 0) dropResLbl.Position = UDim2.new(0, 8, 0, 0) dropResLbl.BackgroundTransparency = 1 dropResLbl.TextColor3 = C.TXT dropResLbl.TextSize = 10 dropResLbl.Font = Enum.Font.Gotham dropResLbl.TextWrapped = true dropResLbl.TextXAlignment = Enum.TextXAlignment.Left dropResLbl.TextYAlignment = Enum.TextYAlignment.Center dropResLbl.Text = "Add dungeons and chests to see estimates." dropResLbl.Parent = dropResFrame
+    local function prob(rate, n)
+        if n <= 0 then return 0 end
+        return (1 - math.pow(1 - rate, n)) * 100
+    end
+    local function recalcDrop()
+        local d, ch = dropDungeons, dropChestsT
+        dropResLbl.Text = string.format(
+            "Dungeons: %d  ·  Chests: %d\n" ..
+            "Legendary  (1%%)      %.1f%% chance  ·  ~%d left\n" ..
+            "Non-Existent (0.33%%)  %.1f%% chance  ·  ~%d left\n" ..
+            "Chest Drop  (5%%)      %.1f%% chance  ·  ~%d left",
+            d, ch,
+            prob(0.01,   d),  math.max(100  - d,  0),
+            prob(0.0033, d),  math.max(303  - d,  0),
+            prob(0.05,   ch), math.max(20   - ch, 0)
+        )
+    end
+    recalcDrop()
+    -- Counter rows (left-click +1, right-click reset)
+    local function mkDropRow(parent, label, getVal, onAdd, onReset)
+        local f = Instance.new("Frame") f.Size = UDim2.new(1, 0, 0, 34) f.BackgroundColor3 = C.PANEL f.BorderSizePixel = 0 f.Parent = parent
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 2)
+        local strip = Instance.new("Frame") strip.Size = UDim2.new(0, 2, 1, 0) strip.BackgroundColor3 = C.GOLD strip.BackgroundTransparency = 0.3 strip.BorderSizePixel = 0 strip.Parent = f
+        local lbl = Instance.new("TextLabel") lbl.Size = UDim2.new(1, -10, 1, 0) lbl.Position = UDim2.new(0, 10, 0, 0) lbl.BackgroundTransparency = 1 lbl.TextColor3 = C.TXT lbl.TextSize = 11 lbl.Font = Enum.Font.GothamBold lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.Parent = f
+        local hint = Instance.new("TextLabel") hint.Size = UDim2.new(1, -10, 1, 0) hint.Position = UDim2.new(0, 10, 0, 0) hint.BackgroundTransparency = 1 hint.TextColor3 = C.SUB hint.TextSize = 9 hint.Font = Enum.Font.Gotham hint.TextXAlignment = Enum.TextXAlignment.Right hint.Text = "L +1 · R reset" hint.Parent = f
+        local btn = Instance.new("TextButton") btn.Size = UDim2.new(1, 0, 1, 0) btn.BackgroundTransparency = 1 btn.Text = "" btn.Parent = f
+        local function refresh() lbl.Text = label .. getVal() end
+        refresh()
+        btn.MouseButton1Click:Connect(function() onAdd() refresh() saveDrops() recalcDrop() end)
+        btn.MouseButton2Click:Connect(function() onReset() refresh() saveDrops() recalcDrop() end)
+    end
+    mkDropRow(PT, "Dungeons: ", function() return dropDungeons end,
+        function() dropDungeons = dropDungeons + 1 end,
+        function() dropDungeons = 0 end)
+    mkDropRow(PT, "Chests: ", function() return dropChestsT end,
+        function() dropChestsT = dropChestsT + 1 end,
+        function() dropChestsT = 0 end)
+    mkBtn(PT, "Reset All", function() dropDungeons = 0 dropChestsT = 0 saveDrops() recalcDrop() end, C.RED)
+
     if _G.VS_P_AUTO and Presets[_G.VS_P_AUTO] then
         local pn = _G.VS_P_AUTO local pd = Presets[pn]
         task.spawn(function() task.wait(8) pcall(applyPreset, pd) end)
