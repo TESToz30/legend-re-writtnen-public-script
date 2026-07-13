@@ -49,6 +49,7 @@ local hkRefs = {}
 local hkActions = {}
 local ToggleSetters = {}
 local Dungeon = { doorESP = false, exitESP = false, chestESP = false, mobESP = false, trapESP = false, autoChest = { on = false, thread = nil }, autoDoor = { on = false, thread = nil }, autoDieOnClear = false }
+local DropTracker = { dungeons = 0, chests = 0, onChestAdded = nil }
 local stamConn = nil
 local mineRemote = nil
 local noclipConn = nil
@@ -1571,6 +1572,7 @@ autoChestLoop = function()
             task.wait(0.2)
             interactWith(c.obj)
             task.wait(0.5)
+            if DropTracker.onChestAdded then DropTracker.onChestAdded() end
         end
         task.wait(1)
     end
@@ -2138,7 +2140,7 @@ do
         function() Mine.thread = task.spawn(mineLoop) end,
         function() Mine.on = false if Mine.thread then task.cancel(Mine.thread) Mine.thread = nil end end)
     mkSec(MT, "SPEED")
-    mkSlider(MT, "Mine Speed (hits/sec)", 1, 60, 20, C.ACNT, function(val)
+    mkSlider(MT, "Mine Speed (hits/sec)", 1, 120, 20, C.ACNT, function(val)
         Mine.speed = 1 / val
     end)
     mkSec(MT, "ORE FILTER") mkDropdown(MT, "Select Ores (all if none selected)", ALL_ORES, Mine.selected)
@@ -2458,20 +2460,18 @@ do
     -- =====================================================
     mkSec(PT, "DROP TRACKER")
     local DROP_FILE = "vs5_drops.json"
-    local dropDungeons = 0  -- mob attempt counter (manual)
-    local dropChestsT = 0   -- chest attempt counter (manual)
     pcall(function()
         local raw = readfile(DROP_FILE)
         if raw and raw ~= "" then
             local ok, data = pcall(HttpService.JSONDecode, HttpService, raw)
             if ok and type(data) == "table" then
-                dropDungeons = data.dungeons or 0
-                dropChestsT = data.chests or 0
+                DropTracker.dungeons = data.dungeons or 0
+                DropTracker.chests = data.chests or 0
             end
         end
     end)
     local function saveDrops()
-        local ok, enc = pcall(HttpService.JSONEncode, HttpService, { dungeons = dropDungeons, chests = dropChestsT })
+        local ok, enc = pcall(HttpService.JSONEncode, HttpService, { dungeons = DropTracker.dungeons, chests = DropTracker.chests })
         if ok then pcall(writefile, DROP_FILE, enc) end
     end
     -- Result panel — shows all three drop rates simultaneously
@@ -2482,17 +2482,18 @@ do
         if n <= 0 then return 0 end
         return (1 - math.pow(1 - rate, n)) * 100
     end
+    local chestRowRefresh = nil  -- set below, called by auto-chest hook
     local function recalcDrop()
-        local d, ch = dropDungeons, dropChestsT
+        local d, ch = DropTracker.dungeons, DropTracker.chests
         dropResLbl.Text = string.format(
             "Dungeons: %d  ·  Chests: %d\n" ..
-            "Legendary  (1%%)      %.1f%% chance  ·  ~%d left\n" ..
+            "Legendary  (1%%)       %.1f%% chance  ·  ~%d left\n" ..
             "Non-Existent (0.33%%)  %.1f%% chance  ·  ~%d left\n" ..
             "Chest Drop  (5%%)      %.1f%% chance  ·  ~%d left",
             d, ch,
-            prob(0.01,   d),  math.max(100  - d,  0),
-            prob(0.0033, d),  math.max(303  - d,  0),
-            prob(0.05,   ch), math.max(20   - ch, 0)
+            prob(0.01,   d),  math.max(100 - d,  0),
+            prob(0.0033, d),  math.max(303 - d,  0),
+            prob(0.05,   ch), math.max(20  - ch, 0)
         )
     end
     recalcDrop()
@@ -2502,20 +2503,31 @@ do
         Instance.new("UICorner", f).CornerRadius = UDim.new(0, 2)
         local strip = Instance.new("Frame") strip.Size = UDim2.new(0, 2, 1, 0) strip.BackgroundColor3 = C.GOLD strip.BackgroundTransparency = 0.3 strip.BorderSizePixel = 0 strip.Parent = f
         local lbl = Instance.new("TextLabel") lbl.Size = UDim2.new(1, -10, 1, 0) lbl.Position = UDim2.new(0, 10, 0, 0) lbl.BackgroundTransparency = 1 lbl.TextColor3 = C.TXT lbl.TextSize = 11 lbl.Font = Enum.Font.GothamBold lbl.TextXAlignment = Enum.TextXAlignment.Left lbl.Parent = f
-        local hint = Instance.new("TextLabel") hint.Size = UDim2.new(1, -10, 1, 0) hint.Position = UDim2.new(0, 10, 0, 0) hint.BackgroundTransparency = 1 hint.TextColor3 = C.SUB hint.TextSize = 9 hint.Font = Enum.Font.Gotham hint.TextXAlignment = Enum.TextXAlignment.Right hint.Text = "L +1 · R reset" hint.Parent = f
+        local hint = Instance.new("TextLabel") hint.Size = UDim2.new(1, -10, 1, 0) hint.Position = UDim2.new(0, 10, 0, 0) hint.BackgroundTransparency = 1 hint.TextColor3 = C.SUB hint.TextSize = 9 hint.Font = Enum.Font.Gotham hint.TextXAlignment = Enum.TextXAlignment.Right hint.Parent = f
         local btn = Instance.new("TextButton") btn.Size = UDim2.new(1, 0, 1, 0) btn.BackgroundTransparency = 1 btn.Text = "" btn.Parent = f
         local function refresh() lbl.Text = label .. getVal() end
         refresh()
         btn.MouseButton1Click:Connect(function() onAdd() refresh() saveDrops() recalcDrop() end)
         btn.MouseButton2Click:Connect(function() onReset() refresh() saveDrops() recalcDrop() end)
+        return refresh
     end
-    mkDropRow(PT, "Dungeons: ", function() return dropDungeons end,
-        function() dropDungeons = dropDungeons + 1 end,
-        function() dropDungeons = 0 end)
-    mkDropRow(PT, "Chests: ", function() return dropChestsT end,
-        function() dropChestsT = dropChestsT + 1 end,
-        function() dropChestsT = 0 end)
-    mkBtn(PT, "Reset All", function() dropDungeons = 0 dropChestsT = 0 saveDrops() recalcDrop() end, C.RED)
+    mkDropRow(PT, "Dungeons: ", function() return DropTracker.dungeons end,
+        function() DropTracker.dungeons = DropTracker.dungeons + 1 end,
+        function() DropTracker.dungeons = 0 end)
+    chestRowRefresh = mkDropRow(PT, "Chests (auto): ", function() return DropTracker.chests end,
+        function() DropTracker.chests = DropTracker.chests + 1 end,
+        function() DropTracker.chests = 0 end)
+    -- Wire auto-chest loop: every chest opened auto-increments and updates UI
+    DropTracker.onChestAdded = function()
+        DropTracker.chests = DropTracker.chests + 1
+        saveDrops()
+        recalcDrop()
+        if chestRowRefresh then chestRowRefresh() end
+    end
+    mkBtn(PT, "Reset All", function()
+        DropTracker.dungeons = 0 DropTracker.chests = 0 saveDrops() recalcDrop()
+        if chestRowRefresh then chestRowRefresh() end
+    end, C.RED)
 
     if _G.VS_P_AUTO and Presets[_G.VS_P_AUTO] then
         local pn = _G.VS_P_AUTO local pd = Presets[pn]
@@ -3416,6 +3428,13 @@ UserInputService.InputBegan:Connect(function(input, gp)
             Hotkeys[hkKey] = input.KeyCode bindingMode[hkKey] = false
             local ref = hkRefs[hkKey]
             if ref then TS:Create(ref.btn, TweenInfo.new(0.1), { BackgroundColor3 = C.PURP }):Play() ref.lbl.Text = input.KeyCode.Name:sub(1, 2):upper() end
+            -- Auto-save hotkeys whenever one is bound
+            pcall(function()
+                local hkOut = {}
+                for k, kc in pairs(Hotkeys) do hkOut[k] = kc.Name end
+                local ok, enc = pcall(HttpService.JSONEncode, HttpService, hkOut)
+                if ok then pcall(writefile, "vs5_hotkeys.json", enc) end
+            end)
             return
         end
     end
@@ -3487,6 +3506,29 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     if Invisible.on then task.wait(0.5) setInvisible(true) end
     if ClimbAnim.on then task.wait(0.5) applyClimbDisable(char) end
     if Fly.on then task.wait(0.5) startFly() end
+end)
+
+-- Auto-restore hotkeys (runs after UI is built so hkRefs exist)
+task.spawn(function()
+    task.wait(0.5)
+    pcall(function()
+        local raw = readfile("vs5_hotkeys.json")
+        if not raw or raw == "" then return end
+        local ok, data = pcall(HttpService.JSONDecode, HttpService, raw)
+        if not ok or type(data) ~= "table" then return end
+        for k, name in pairs(data) do
+            pcall(function()
+                local kc = Enum.KeyCode[name]
+                if not kc then return end
+                Hotkeys[k] = kc
+                local ref = hkRefs[k]
+                if ref then
+                    ref.lbl.Text = name:sub(1, 2):upper()
+                    TS:Create(ref.btn, TweenInfo.new(0.1), { BackgroundColor3 = C.PURP }):Play()
+                end
+            end)
+        end
+    end)
 end)
 
 print("[Void Stars] v5 Loaded — Farm | ESP | Char | Gates | Mine | Harvest | Dungeon | Raids | Misc | Trade")
