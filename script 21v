@@ -398,7 +398,11 @@ function hoverAbove(mob, dt)
         tp = r.Position + Vector3.new(math.cos(octAngle) * OCT_R, HOVER, math.sin(octAngle) * OCT_R)
     end
     if not (floatBP and floatBP.Parent) then startFloat() end
-    if floatBP then floatBP.Position = tp end
+    if floatBP then
+        -- Scale spring stiffness so combat orbit respects the tween speed slider
+        floatBP.P = 20000 * (MOVEMENT_CONFIG.Speed / 60)
+        floatBP.Position = tp
+    end
 end
 
 -- Travel to mob — tweens floatBP.Position (not HumanoidRootPart CFrame),
@@ -418,7 +422,7 @@ function tweenTo(target)
         local tp = r.Position + Vector3.new(0, HOVER, 0)
         local d = (h.Position - tp).Magnitude
         if d < 4 then break end
-        local duration = math.clamp(d / MOVEMENT_CONFIG.Speed, 0.3, 8)
+        local duration = math.clamp(d / MOVEMENT_CONFIG.Speed, 0.05, 8)
         local tw = TS:Create(h, TweenInfo.new(duration, MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(tp) })
         tw:Play()
         tw.Completed:Wait()
@@ -530,15 +534,68 @@ local MOB_SPAWNS = {
     ["Dragon"]          = Vector3.new(-3566.334228515625, 347.40924072265625, -534.7259521484375),
     ["Light Paladen"]   = Vector3.new(-4432.69140625, -337.2019348144531, -572.9346313476562),
     ["Melioofus"]       = Vector3.new(-675.1752319335938, 344.1856384277344, 112.39432525634766),
-    ["Kaze"]            = Vector3.new(-3101.68310546875, -336.92193603515625, -1562.3408203125),
+    ["Kaze"]            = Vector3.new(-3043.4, -337.0, -1559.6),
     ["Regulus"]         = Vector3.new(-3175.1435546875, -339.93212890625, -250.98159790039062),
     ["Legendary"]       = Vector3.new(-1130.9132080078125, 36.917057037353516, -1530.8701171875),
+
+    -- Goblins (cluster: X~-1150 to -1250, Z~-490 to -710)
+    ["Goblin3"]         = Vector3.new(-1234.4, 5.1, -557.9),
+    ["Goblin4"]         = Vector3.new(-1150.5, 2.2, -705.8),
+    ["Goblin5"]         = Vector3.new(-1196.9, 3.4, -673.3),
+    ["Goblin6"]         = Vector3.new(-1238.7, 3.0, -699.3),
+    -- Goblins (cluster: X~-1190 to -1250, Z~-314 to -368)
+    ["Goblin16"]        = Vector3.new(-1235.3, 3.3, -318.2),
+    ["Goblin17"]        = Vector3.new(-1209.8, 3.8, -324.9),
+    ["Goblin18"]        = Vector3.new(-1239.0, 3.7, -351.8),
+    -- Goblins (cluster: X~-548 to -598, Z~104 to 147)
+    ["Goblin13"]        = Vector3.new(-567.4, 6.5, 104.5),
+    ["Goblin14"]        = Vector3.new(-547.7, 7.1, 146.6),
+    ["Goblin15"]        = Vector3.new(-597.7, 10.0, 141.5),
+
+    -- HobGoblins
+    ["HobGoblin1"]      = Vector3.new(-1236.7, 4.0, -343.0),
+    ["HobGoblin2"]      = Vector3.new(-566.9, 3.2, 136.4),
+
+    -- Witches (spread across two areas)
+    ["Witch1"]          = Vector3.new(-143.7, 5.2, -754.6),
+    ["Witch2"]          = Vector3.new(40.6, 5.2, -774.4),
+    ["Witch3"]          = Vector3.new(-38.0, 5.2, -323.9),
+    ["Witch4"]          = Vector3.new(-132.0, 5.2, -253.8),
+    ["Witch5"]          = Vector3.new(95.2, 5.2, -320.6),
+    ["Witch6"]          = Vector3.new(65.4, 5.2, -392.2),
+    ["Witch7"]          = Vector3.new(68.9, 5.2, -625.0),
+    ["Witch8"]          = Vector3.new(-123.5, 5.2, -623.8),
+    ["Witch9"]          = Vector3.new(-125.3, 5.2, -379.4),
+
+    -- Bandits
+    ["Bandit1"]         = Vector3.new(-733.7, 12.4, 276.2),
+    ["Bandit5"]         = Vector3.new(-677.8, 5.1, 213.0),
+
+    -- DarkStoneKnights
+    ["DarkStoneKnight4"] = Vector3.new(-3217.1, 85.3, -1189.1),
+    ["DarkStoneKnight5"] = Vector3.new(-3381.6, 222.3, -468.4),
+    ["DarkStoneKnight6"] = Vector3.new(-3374.7, 184.0, -632.2),
+    ["DarkStoneKnight7"] = Vector3.new(-3271.5, 184.0, -618.1),
+    ["DarkStoneKnight8"] = Vector3.new(-3294.7, 184.0, -685.8),
+
+    -- PlantBeasts
+    ["PlantBeast1"]     = Vector3.new(-670.7, 36.0, -1854.5),
+    ["PlantBeast2"]     = Vector3.new(-1456.4, 37.6, -1725.3),
+    ["PlantBeast3"]     = Vector3.new(-1161.6, 40.7, -1622.1),
+    ["PlantBeast4"]     = Vector3.new(-962.0, 47.2, -1859.7),
+
+    -- Bosses
+    ["Boar King"]       = Vector3.new(-4070.9, 406.4, -859.9),
+    ["RuinedKnight"]    = Vector3.new(-3539.7, -338.9, -1086.8),
+    ["Hiei"]            = Vector3.new(-2905.9, 333.0, -863.4),
+    ["RougePaladin"]    = Vector3.new(-4450.9, -339.9, -593.5),
+    ["Nodryre"]         = Vector3.new(-132.0, 122.6, -713.7),
 }
 
 -- =====================================================
 -- MOB FINDING
 -- =====================================================
-local ALL_MOBS = { "Law", "Divine General", "AbyssKnight", "Ant King", "Hiraglacir", "SeaKing1", "LightningGod", "Water Slayer", "Sorcerer Slayer", "SpaceElf", "VintageSpacer", "UFO", "Tanzaknite", "Pharaoh", "RoninA", "RoninB", "Dragon", "Light Paladen", "Melioofus", "Kaze", "Regulus", "Legendary" }
+local ALL_MOBS = { "Law", "Divine General", "AbyssKnight", "Ant King", "Hiraglacir", "SeaKing1", "LightningGod", "Water Slayer", "Sorcerer Slayer", "SpaceElf", "VintageSpacer", "UFO", "Tanzaknite", "Pharaoh", "RoninA", "RoninB", "Dragon", "Light Paladen", "Melioofus", "Kaze", "Regulus", "Legendary", "Goblin", "HobGoblin", "Witch", "Bandit", "DarkStoneKnight", "PlantBeast", "Boar King", "RuinedKnight", "Hiei", "RougePaladin", "Nodryre" }
 function isMobSelected(n)
     local any = false
     for _, v in pairs(SelectedMobs) do if v then any = true break end end
@@ -2038,7 +2095,7 @@ do
     end)
     mkBtn(CT, "Force Clear VFX Now", function() disableVFX(LocalPlayer.Character) end, C.RED)
     mkSec(CT, "TWEEN SPEED")
-    mkSlider(CT, "Max Tween Speed", 20, 200, MOVEMENT_CONFIG.Speed, C.ACNT, function(val)
+    mkSlider(CT, "Max Tween Speed", 20, 400, MOVEMENT_CONFIG.Speed, C.ACNT, function(val)
         MOVEMENT_CONFIG.Speed = val
     end)
     mkSec(CT, "HOVER")
