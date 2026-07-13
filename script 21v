@@ -50,6 +50,8 @@ local hkActions = {}
 local ToggleSetters = {}
 local Dungeon = { doorESP = false, exitESP = false, chestESP = false, mobESP = false, trapESP = false, autoChest = { on = false, thread = nil }, autoDoor = { on = false, thread = nil }, autoDieOnClear = false }
 local DropTracker = { dungeons = 0, chests = 0, onChestAdded = nil }
+local Invisible = { on = false, originals = {} }
+local Fly = { on = false, speed = 80, conn = nil, bv = nil, bg = nil }
 local stamConn = nil
 local mineRemote = nil
 local noclipConn = nil
@@ -952,7 +954,7 @@ end
 -- =====================================================
 -- INVISIBILITY
 -- =====================================================
-local Invisible = { on = false, originals = {} }
+Invisible = { on = false, originals = {} }
 function setInvisible(val)
     Invisible.on = val
     local char = LocalPlayer.Character
@@ -1038,7 +1040,7 @@ end
 -- =====================================================
 -- FLY
 -- =====================================================
-local Fly = { on = false, speed = 80, conn = nil, bv = nil, bg = nil }
+Fly = { on = false, speed = 80, conn = nil, bv = nil, bg = nil }
 local function startFly()
     if Fly.conn then return end
     local hrp = getHumanoidRootPart()
