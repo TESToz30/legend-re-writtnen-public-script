@@ -76,7 +76,7 @@ local autoPotionThreshold = 0.30
 local AutoPotion = {
     on = false, thread = nil, lastUsed = 0, cooldown = 20,
     hp   = { on = false, threshold = 0.40, lastUsed = 0, cooldown = 5  },
-    stam = { on = false, threshold = 0.30, lastUsed = 0, cooldown = 10 },
+    ambrosia = { on = false, threshold = 0.50, lastUsed = 0, cooldown = 15 },
 }
 
 -- (farmLoop, mineLoop, harvestLoop, autoChestLoop, autoDoorLoop, startUrukRaid, stopRaid assigned as globals below)
@@ -1172,9 +1172,9 @@ end
 -- =====================================================
 -- AUTO POTION
 -- =====================================================
-local AethericExtractRemote = Remotes and Remotes:FindFirstChild("AethericExtract")
-local HealthPotionRemote    = Remotes and Remotes:FindFirstChild("HealthPotion")
-local StaminaPotionRemote   = Remotes and Remotes:FindFirstChild("StaminaPotion")
+local AetherExtractRemote = Remotes and Remotes:FindFirstChild("AetherExtract")
+local IchorChaliceRemote  = Remotes and Remotes:FindFirstChild("IchorChalice")
+local AmbrosiaRemote      = Remotes and Remotes:FindFirstChild("Ambrosia")
 function startAutoPotion()
     if AutoPotion.on then return end
     AutoPotion.on = true
@@ -1185,39 +1185,38 @@ function startAutoPotion()
                 -- Mana
                 local mana    = data:FindFirstChild("Mana")
                 local maxMana = data:FindFirstChild("MaxMana")
+                -- AetherExtract: fires on mana threshold
                 if mana and maxMana and maxMana.Value > 0 then
                     if (mana.Value / maxMana.Value) < autoPotionThreshold
                         and (tick() - AutoPotion.lastUsed) > AutoPotion.cooldown then
-                        if AethericExtractRemote then
-                            pcall(function() AethericExtractRemote:FireServer() end)
+                        if AetherExtractRemote then
+                            pcall(function() AetherExtractRemote:FireServer() end)
                             AutoPotion.lastUsed = tick()
                         end
                     end
                 end
-                -- HP
+                -- IchorChalice: fires on HP threshold
                 if AutoPotion.hp.on then
                     local hp    = data:FindFirstChild("Health")
                     local maxHp = data:FindFirstChild("MaxHealth")
                     if hp and maxHp and maxHp.Value > 0 then
                         if (hp.Value / maxHp.Value) < AutoPotion.hp.threshold
                             and (tick() - AutoPotion.hp.lastUsed) > AutoPotion.hp.cooldown then
-                            if HealthPotionRemote then
-                                pcall(function() HealthPotionRemote:FireServer() end)
+                            if IchorChaliceRemote then
+                                pcall(function() IchorChaliceRemote:FireServer() end)
                                 AutoPotion.hp.lastUsed = tick()
                             end
                         end
                     end
                 end
-                -- Stamina
-                if AutoPotion.stam.on then
-                    local stam    = data:FindFirstChild("Stamina")
-                    local maxStam = data:FindFirstChild("MaxStamina")
-                    if stam and maxStam and maxStam.Value > 0 then
-                        if (stam.Value / maxStam.Value) < AutoPotion.stam.threshold
-                            and (tick() - AutoPotion.stam.lastUsed) > AutoPotion.stam.cooldown then
-                            if StaminaPotionRemote then
-                                pcall(function() StaminaPotionRemote:FireServer() end)
-                                AutoPotion.stam.lastUsed = tick()
+                -- Ambrosia (hybrid mana+stam): fires on mana threshold
+                if AutoPotion.ambrosia.on then
+                    if mana and maxMana and maxMana.Value > 0 then
+                        if (mana.Value / maxMana.Value) < AutoPotion.ambrosia.threshold
+                            and (tick() - AutoPotion.ambrosia.lastUsed) > AutoPotion.ambrosia.cooldown then
+                            if AmbrosiaRemote then
+                                pcall(function() AmbrosiaRemote:FireServer() end)
+                                AutoPotion.ambrosia.lastUsed = tick()
                             end
                         end
                     end
@@ -2060,19 +2059,19 @@ do
         if v then startAutoPotion() else stopAutoPotion() end
     end, "autoPot")
     mkPotionSlider(CT)
-    mkToggle(CT, "Auto HP Potion", false, function(v)
+    mkToggle(CT, "Auto IchorChalice (HP)", false, function(v)
         AutoPotion.hp.on = v
         if v and not AutoPotion.on then startAutoPotion() end
     end)
-    mkSlider(CT, "HP Threshold", 10, 90, 40, C.RED, function(val)
+    mkSlider(CT, "IchorChalice HP Threshold", 10, 90, 40, C.RED, function(val)
         AutoPotion.hp.threshold = val / 100
     end)
-    mkToggle(CT, "Auto Stamina Potion", false, function(v)
-        AutoPotion.stam.on = v
+    mkToggle(CT, "Auto Ambrosia (Mana+Stam)", false, function(v)
+        AutoPotion.ambrosia.on = v
         if v and not AutoPotion.on then startAutoPotion() end
     end)
-    mkSlider(CT, "Stamina Threshold", 10, 90, 30, C.GREEN, function(val)
-        AutoPotion.stam.threshold = val / 100
+    mkSlider(CT, "Ambrosia Mana Threshold", 10, 90, 50, C.PURP, function(val)
+        AutoPotion.ambrosia.threshold = val / 100
     end)
     mkSec(CT, "INVISIBILITY")
     ToggleSetters.invisible = mkToggle(CT, "Invisibility", false, function(v)
