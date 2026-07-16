@@ -56,9 +56,8 @@ local KillAura   = { on = false, conn = nil, radius = 30 }
 local WalkSpeed  = { on = false, conn = nil, speed = 24 }
 local AntiAFK    = { on = false, conn = nil }
 local AutoBlock  = { on = false, conn = nil, lastHp = 1, threshold = 0.15 }
-local KillTracker = { on = false, kills = 0, startTime = nil, conn = nil }
 local DungeonTimer = { running = false, startTime = nil, runs = {}, best = nil, avg = nil }
-local MobPriority = {}
+local SelectedMobsOrder = {}
 local stamConn = nil
 local mineRemote = nil
 local noclipConn = nil
@@ -369,58 +368,22 @@ function attackMob(mob)
         vu:Button1Up(Vector2.new(sp.X, sp.Y), workspace.CurrentCamera.CFrame)
     end)
 end
--- Clear mineRemote whenever the player drops/swaps their tool
-local function onToolRemoved(child)
-    if child:IsA("Tool") then mineRemote = nil end
-end
-if LocalPlayer.Character then
-    LocalPlayer.Character.ChildRemoved:Connect(onToolRemoved)
-end
-LocalPlayer.CharacterAdded:Connect(function(char)
-    mineRemote = nil
-    char.ChildRemoved:Connect(onToolRemoved)
-end)
-
 function mineHit()
-    -- Validate existing reference is still alive
-    if mineRemote then
-        local ok = pcall(function() return mineRemote.Parent end)
-        if not ok then mineRemote = nil end
-    end
-    if mineRemote then
-        pcall(function() mineRemote:FireServer() end)
-        return
-    end
-    -- Fallback: VirtualUser click aimed at viewport centre
+    if mineRemote then pcall(function() mineRemote:FireServer() end) return end
     pcall(function()
-        local cam = workspace.CurrentCamera
         local vu = game:GetService("VirtualUser")
-        local vp = cam.ViewportSize
-        vu:Button1Down(Vector2.new(vp.X / 2, vp.Y / 2), cam.CFrame)
+        vu:Button1Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
         task.wait(0.05)
-        vu:Button1Up(Vector2.new(vp.X / 2, vp.Y / 2), cam.CFrame)
+        vu:Button1Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
     end)
 end
--- Hook: capture the Activate remote from whichever Tool is equipped,
--- not just SwordScript — handles pickaxes, axes, any tool
 local _vsNC
 pcall(function()
     _vsNC = hookmetamethod(game, "__namecall", function(self, ...)
         local m = getnamecallmethod()
-        if m == "FireServer" and self.Name == "Activate" then
-            local p = self.Parent
-            while p and not p:IsA("Tool") do p = p.Parent end
-            if p then
-                local char = LocalPlayer.Character
-                if char and p.Parent == char then
-                    -- Method 1: original — capture if script is SwordScript (works on first manual swing)
-                    local fromSwordScript = self.Parent and self.Parent.Name == "SwordScript"
-                    -- Method 2: only capture when mine is running (prevents sword overwriting it)
-                    local fromMineSession = Mine.on
-                    if fromSwordScript or fromMineSession then
-                        mineRemote = self
-                    end
-                end
+        if m == "FireServer" and not mineRemote then
+            if self.Name == "Activate" and self.Parent and self.Parent.Name == "SwordScript" then
+                mineRemote = self
             end
         end
         return _vsNC(self, ...)
@@ -664,9 +627,9 @@ function findMob()
         end
     end
     if #candidates == 0 then return nil end
-    -- Priority queue: check each priority pattern in order, pick nearest match
-    if #MobPriority > 0 then
-        for _, pat in ipairs(MobPriority) do
+    -- Priority: respect selection order (first selected = highest priority)
+    if #SelectedMobsOrder > 0 then
+        for _, pat in ipairs(SelectedMobsOrder) do
             local best, bd = nil, math.huge
             for _, c in ipairs(candidates) do
                 if c.mob.Name:find(pat) and c.dist < bd then bd = c.dist best = c.mob end
@@ -1873,7 +1836,7 @@ function mkFarmToggle(p, startText, stopText, stateCheck, onStart, onStop)
     task.spawn(function() while true do task.wait(0.5) refresh() end end)
     return btn
 end
-function mkDropdown(p, headerText, items, state)
+function mkDropdown(p, headerText, items, state, orderList)
     local hdr = Instance.new("TextButton") hdr.Size = UDim2.new(1, 0, 0, 30) hdr.BackgroundColor3 = C.PANEL hdr.BorderSizePixel = 0 hdr.Text = headerText hdr.TextColor3 = C.SUB hdr.TextSize = 10 hdr.Font = Enum.Font.Gotham hdr.Parent = p
     Instance.new("UICorner", hdr).CornerRadius = UDim.new(0, 2)
     local ar = Instance.new("TextLabel") ar.Size = UDim2.new(0, 18, 1, 0) ar.Position = UDim2.new(1, -22, 0, 0) ar.BackgroundTransparency = 1 ar.Text = "▾" ar.TextColor3 = C.SUB ar.TextSize = 10 ar.Font = Enum.Font.GothamBold ar.Parent = hdr
@@ -1892,12 +1855,25 @@ function mkDropdown(p, headerText, items, state)
             local on = state[name]
             TS:Create(row, TweenInfo.new(0.1), { BackgroundColor3 = on and C.PURP or C.OFF }):Play()
             row.TextColor3 = on and C.TXT or C.SUB
+            -- track selection order if orderList provided
+            if orderList then
+                if on then
+                    -- add to end if not already present
+                    local found = false
+                    for _, v in ipairs(orderList) do if v == name then found = true break end end
+                    if not found then table.insert(orderList, name) end
+                else
+                    -- remove from order list
+                    for i = #orderList, 1, -1 do if orderList[i] == name then table.remove(orderList, i) end end
+                end
+            end
         end)
     end
     local cl = Instance.new("TextButton") cl.Size = UDim2.new(1, 0, 0, 24) cl.BackgroundColor3 = Color3.fromRGB(60, 20, 30) cl.BorderSizePixel = 0 cl.Text = "Clear" cl.TextColor3 = C.SUB cl.TextSize = 9 cl.Font = Enum.Font.Gotham cl.Parent = bd
     Instance.new("UICorner", cl).CornerRadius = UDim.new(0, 2)
     cl.MouseButton1Click:Connect(function()
         for k in pairs(state) do state[k] = false end
+        if orderList then for i = #orderList, 1, -1 do table.remove(orderList, i) end end
         for _, c in ipairs(bd:GetChildren()) do
             if c:IsA("TextButton") and c ~= cl then c.BackgroundColor3 = C.OFF c.TextColor3 = C.SUB end
         end
@@ -2112,38 +2088,6 @@ function stopAutoBlock()
 end
 
 -- =====================================================
--- KILL RATE TRACKER
--- =====================================================
-local killTrackerLbl = nil
-function startKillTracker()
-    if KillTracker.on then return end
-    KillTracker.on = true
-    KillTracker.kills = 0
-    KillTracker.startTime = tick()
-    local f = workspace:FindFirstChild("Mobs")
-    if f then
-        KillTracker.conn = f.ChildRemoved:Connect(function(child)
-            if not child:IsA("Model") then return end
-            local hum = child:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health <= 0 then
-                KillTracker.kills = KillTracker.kills + 1
-            end
-        end)
-    end
-end
-function stopKillTracker()
-    KillTracker.on = false
-    if KillTracker.conn then KillTracker.conn:Disconnect() KillTracker.conn = nil end
-end
-local function getKillRateStr()
-    if not KillTracker.startTime then return "Kills: 0 | 0/min | 0/hr" end
-    local elapsed = math.max(tick() - KillTracker.startTime, 1)
-    local perMin  = (KillTracker.kills / elapsed) * 60
-    local perHr   = perMin * 60
-    return string.format("Kills: %d | %.1f/min | %d/hr", KillTracker.kills, perMin, math.floor(perHr))
-end
-
--- =====================================================
 -- DUNGEON TIMER
 -- =====================================================
 local dungTimerLbl = nil
@@ -2184,7 +2128,6 @@ task.spawn(function()
     while true do
         task.wait(1)
         if DungeonTimer.running then refreshDungTimerLbl() end
-        if KillTracker.on and killTrackerLbl then killTrackerLbl.Text = getKillRateStr() end
     end
 end)
 
@@ -2212,47 +2155,7 @@ do
     mkFarmToggle(FT, "Start Auto Farm", "Stop Auto Farm", function() return Farm.on end, function() task.spawn(farmLoop) end, function() Farm.on = false Farm.tweening = false end)
     mkToggle(FT, "Kill Aura", false, function(v) if v then startKillAura() else stopKillAura() end end)
     mkSlider(FT, "Kill Aura Radius", 5, 100, 30, C.RED, function(val) KillAura.radius = val end)
-    mkSec(FT, "MOB TARGETS") mkDropdown(FT, "Select Targets (all if none selected)", ALL_MOBS, SelectedMobs)
-    -- Mob Priority Queue
-    mkSec(FT, "MOB PRIORITY")
-    do
-        local prioLbl = Instance.new("TextLabel")
-        prioLbl.Size = UDim2.new(1, 0, 0, 22) prioLbl.BackgroundTransparency = 1
-        prioLbl.TextColor3 = C.SUB prioLbl.TextSize = 10 prioLbl.Font = Enum.Font.Gotham
-        prioLbl.TextXAlignment = Enum.TextXAlignment.Left prioLbl.Text = "No priority set — farms nearest mob"
-        prioLbl.Parent = FT
-        local function refreshPrioLbl()
-            if #MobPriority == 0 then
-                prioLbl.Text = "No priority set — farms nearest mob"
-            else
-                prioLbl.Text = "Priority: " .. table.concat(MobPriority, " > ")
-            end
-        end
-        local prioBox = Instance.new("TextBox")
-        prioBox.Size = UDim2.new(1, 0, 0, 28) prioBox.BackgroundColor3 = C.PANEL prioBox.BorderSizePixel = 0
-        prioBox.Text = "" prioBox.PlaceholderText = "Add mob name pattern (e.g. HobGoblin)..."
-        prioBox.PlaceholderColor3 = C.SUB prioBox.TextColor3 = C.TXT
-        prioBox.TextSize = 10 prioBox.Font = Enum.Font.Gotham prioBox.ClearTextOnFocus = false prioBox.Parent = FT
-        Instance.new("UICorner", prioBox).CornerRadius = UDim.new(0, 2)
-        local prioRowFrame = Instance.new("Frame") prioRowFrame.Size = UDim2.new(1, 0, 0, 28) prioRowFrame.BackgroundTransparency = 1 prioRowFrame.Parent = FT
-        local prioRowLayout = Instance.new("UIListLayout") prioRowLayout.FillDirection = Enum.FillDirection.Horizontal prioRowLayout.Padding = UDim.new(0, 4) prioRowLayout.Parent = prioRowFrame
-        local function mkPrioBtn(txt, col, fn)
-            local b = Instance.new("TextButton") b.Size = UDim2.new(0.33, -3, 1, 0) b.BackgroundColor3 = col b.BorderSizePixel = 0
-            b.Text = txt b.TextColor3 = C.TXT b.TextSize = 10 b.Font = Enum.Font.GothamBold b.Parent = prioRowFrame
-            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 2)
-            b.MouseButton1Click:Connect(fn) return b
-        end
-        mkPrioBtn("Add (low prio)", C.PURP, function()
-            local t = prioBox.Text:match("^%s*(.-)%s*$")
-            if t ~= "" then table.insert(MobPriority, t) prioBox.Text = "" refreshPrioLbl() end
-        end)
-        mkPrioBtn("Add (top prio)", C.ACNT, function()
-            local t = prioBox.Text:match("^%s*(.-)%s*$")
-            if t ~= "" then table.insert(MobPriority, 1, t) prioBox.Text = "" refreshPrioLbl() end
-        end)
-        mkPrioBtn("Clear All", C.RED, function() MobPriority = {} refreshPrioLbl() end)
-        prioLbl.Parent = FT  -- move to after buttons
-    end
+    mkSec(FT, "MOB TARGETS") mkDropdown(FT, "Select Targets (priority = selection order)", ALL_MOBS, SelectedMobs, SelectedMobsOrder)
     mkSec(FT, "MOVEMENT")
     ToggleSetters.noclip = mkToggle(FT, "Noclip", false, function(v) if v then startNoclip() else stopNoclip() end end, "noclip")
     ToggleSetters.staticHover = mkToggle(FT, "Static Hover (no orbit)", false, function(v) Farm.staticHover = v end)
@@ -2823,28 +2726,6 @@ do
         saveFeedback.TextColor3 = C.GREEN saveFeedback.Text = "Saved: " .. n
         task.spawn(function() task.wait(3) saveFeedback.Text = "" end)
     end, C.GOLD)
-    -- =====================================================
-    mkSec(PT, "KILL RATE")
-    do
-        local krFrame = Instance.new("Frame") krFrame.Size = UDim2.new(1, 0, 0, 30) krFrame.BackgroundColor3 = C.PANEL krFrame.BorderSizePixel = 0 krFrame.Parent = PT
-        Instance.new("UICorner", krFrame).CornerRadius = UDim.new(0, 2)
-        killTrackerLbl = Instance.new("TextLabel") killTrackerLbl.Size = UDim2.new(1, -8, 1, 0) killTrackerLbl.Position = UDim2.new(0, 8, 0, 0) killTrackerLbl.BackgroundTransparency = 1 killTrackerLbl.TextColor3 = C.TXT killTrackerLbl.TextSize = 10 killTrackerLbl.Font = Enum.Font.GothamBold killTrackerLbl.TextXAlignment = Enum.TextXAlignment.Left killTrackerLbl.Text = "Kills: 0 | 0.0/min | 0/hr" killTrackerLbl.Parent = krFrame
-        local krRow = Instance.new("Frame") krRow.Size = UDim2.new(1, 0, 0, 28) krRow.BackgroundTransparency = 1 krRow.Parent = PT
-        local krLayout = Instance.new("UIListLayout") krLayout.FillDirection = Enum.FillDirection.Horizontal krLayout.Padding = UDim.new(0, 4) krLayout.Parent = krRow
-        local function mkKRBtn(txt, col, fn)
-            local b = Instance.new("TextButton") b.Size = UDim2.new(0.5, -2, 1, 0) b.BackgroundColor3 = col b.BorderSizePixel = 0 b.Text = txt b.TextColor3 = C.TXT b.TextSize = 10 b.Font = Enum.Font.GothamBold b.Parent = krRow
-            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 2) b.MouseButton1Click:Connect(fn)
-        end
-        mkKRBtn("Start Tracking", C.GREEN, function()
-            startKillTracker()
-            killTrackerLbl.Text = getKillRateStr()
-        end)
-        mkKRBtn("Stop / Reset", C.RED, function()
-            stopKillTracker()
-            KillTracker.kills = 0 KillTracker.startTime = nil
-            killTrackerLbl.Text = "Kills: 0 | 0.0/min | 0/hr"
-        end)
-    end
     mkSec(PT, "DROP TRACKER")
     local DROP_FILE = "vs5_drops.json"
     pcall(function()
