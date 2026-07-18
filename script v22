@@ -387,9 +387,16 @@ local function findEquippedMineRemote()
 end
 
 function mineHit()
-    -- Try to capture remote if not yet found
-    if not mineRemote then mineRemote = findEquippedMineRemote() end
-    if mineRemote then pcall(function() mineRemote:FireServer() end) return end
+    -- Re-capture remote if missing or parent is gone (stale reference)
+    if not mineRemote or not mineRemote.Parent then
+        mineRemote = findEquippedMineRemote()
+    end
+    if mineRemote and mineRemote.Parent then
+        local ok = pcall(function() mineRemote:FireServer() end)
+        if ok then return end
+        -- Fire failed — stale, clear and fall through to VirtualUser
+        mineRemote = nil
+    end
     -- Fallback: click at viewport center
     pcall(function()
         local vu = game:GetService("VirtualUser")
