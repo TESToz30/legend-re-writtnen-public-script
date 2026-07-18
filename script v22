@@ -464,8 +464,20 @@ end
 local function makeNavParams()
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
+    local excl = {}
+    -- Exclude player character
     local char = game.Players.LocalPlayer.Character
-    params.FilterDescendantsInstances = char and { char } or {}
+    if char then table.insert(excl, char) end
+    -- Exclude mobs so their hitboxes don't block the ray to hover above them
+    local mobs = workspace:FindFirstChild("Mobs")
+    if mobs then table.insert(excl, mobs) end
+    -- Exclude other players/avatars
+    local avatars = workspace:FindFirstChild("Avatars")
+    if avatars then table.insert(excl, avatars) end
+    -- Exclude gate objects so enterGate doesn't false-block on the gate part itself
+    local gates = workspace:FindFirstChild("Gates")
+    if gates then table.insert(excl, gates) end
+    params.FilterDescendantsInstances = excl
     return params
 end
 
