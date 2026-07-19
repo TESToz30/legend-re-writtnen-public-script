@@ -1463,8 +1463,16 @@ end)
 local ALL_ORES = { "BronzeOre", "IronOre", "BlackOre", "AdamantOre", "RuneOre", "WhiteStone", "DragonStone", "GoldOre", "CrystalOre", "StardustOre", "GalaxyOre", "MysticOre", "CrystalightOre" }
 function oreAlive(o)
     if not o or not o.Parent then return false end
-    local h = o:FindFirstChild("HP")
-    return h and h.Value > 0
+    -- Check HP first (standard ores)
+    local hp = o:FindFirstChild("HP")
+    if hp and hp.Value > 0 then return true end
+    -- Broader check — crystals/nodes may use different value names
+    for _, child in ipairs(o:GetChildren()) do
+        if (child:IsA("NumberValue") or child:IsA("IntValue")) and child.Value > 0 then
+            return true
+        end
+    end
+    return false
 end
 function findOre()
     local h = getHumanoidRootPart()
