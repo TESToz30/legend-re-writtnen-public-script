@@ -1,0 +1,54 @@
+-- =====================================================
+-- VOID STARS — CRYSTAL / ORE SCANNER
+-- Run this inside a gate where mana crystals spawn.
+-- Prints every Model in workspace that looks mineable
+-- so we can see their exact name and child structure.
+-- =====================================================
+
+local Players = game:GetService("Players")
+local lp = Players.LocalPlayer
+local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+
+local SCAN_RADIUS = 200  -- studs from player (set to math.huge to scan everything)
+
+print("===== CRYSTAL / ORE SCANNER =====")
+print("Player pos:", hrp and tostring(hrp.Position) or "unknown")
+print("")
+
+local found = 0
+for _, obj in ipairs(workspace:GetDescendants()) do
+    if not obj:IsA("Model") then continue end
+
+    -- Distance filter
+    local root = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+    if not root then continue end
+    if hrp then
+        local d = (hrp.Position - root.Position).Magnitude
+        if d > SCAN_RADIUS then continue end
+    end
+
+    -- Print any Model that has a NumberValue or IntValue child (possible HP/health)
+    local hasValue = false
+    local valueInfo = {}
+    for _, child in ipairs(obj:GetChildren()) do
+        if child:IsA("NumberValue") or child:IsA("IntValue") or child:IsA("StringValue") or child:IsA("BoolValue") then
+            hasValue = true
+            table.insert(valueInfo, string.format("%s(%s)=%s", child.Name, child.ClassName, tostring(child.Value)))
+        end
+    end
+
+    if hasValue then
+        found = found + 1
+        print(string.format("[%d] Name: %s", found, obj.Name))
+        print(string.format("    Path: %s", obj:GetFullName()))
+        print(string.format("    Pos:  X=%.1f  Y=%.1f  Z=%.1f", root.Position.X, root.Position.Y, root.Position.Z))
+        print(string.format("    Values: %s", table.concat(valueInfo, ", ")))
+        print("    ---")
+    end
+end
+
+if found == 0 then
+    print("No mineable-looking Models found within " .. SCAN_RADIUS .. " studs.")
+    print("Try increasing SCAN_RADIUS or run while standing next to a crystal.")
+end
+print("===== DONE — " .. found .. " object(s) found =====")
