@@ -60,6 +60,7 @@ local AutoBlock  = { on = false, conn = nil, lastHp = 1, threshold = 0.15 }
 local Anchor     = { on = false, pos = nil, conn = nil }
 
 local SelectedMobsOrder = {}
+local SelectedOresOrder = {}
 local stamConn = nil
 local mineRemote = nil
 local noclipConn = nil
@@ -1491,18 +1492,45 @@ function findOre()
     if not h then return nil end
     local any = false
     for _, v in pairs(Mine.selected) do if v then any = true break end end
-    local best, bd = nil, math.huge
-    -- Find anything in workspace with HP > 0 — the game tags all mineable objects this way
+
+    -- Build list of all alive ores in workspace
+    local candidates = {}
     for _, o in ipairs(workspace:GetDescendants()) do
         if o:IsA("Model") and oreAlive(o) then
-            -- always include anything with "mana" in the name regardless of filter
-            local isMana = o.Name:lower():find("mana")
-            if any and not Mine.selected[o.Name] and not isMana then continue end
             local r = o.PrimaryPart or o:FindFirstChildWhichIsA("BasePart")
             if r then
-                local d = (h.Position - r.Position).Magnitude
-                if d < bd then bd = d best = o end
+                table.insert(candidates, { ore = o, dist = (h.Position - r.Position).Magnitude })
             end
+        end
+    end
+    if #candidates == 0 then return nil end
+
+    -- Nothing selected — mine nearest of anything
+    if not any then
+        local best, bd = nil, math.huge
+        for _, c in ipairs(candidates) do
+            if c.dist < bd then bd = c.dist best = c.ore end
+        end
+        return best
+    end
+
+    -- Something selected — respect dropdown selection order (first selected = highest priority)
+    if #SelectedOresOrder > 0 then
+        for _, name in ipairs(SelectedOresOrder) do
+            local best, bd = nil, math.huge
+            for _, c in ipairs(candidates) do
+                if c.ore.Name == name and c.dist < bd then bd = c.dist best = c.ore end
+            end
+            if best then return best end
+        end
+    end
+
+    -- Fallback: nearest of any selected ore (mana crystals always included)
+    local best, bd = nil, math.huge
+    for _, c in ipairs(candidates) do
+        local isMana = c.ore.Name:lower():find("mana")
+        if (Mine.selected[c.ore.Name] or isMana) and c.dist < bd then
+            bd = c.dist best = c.ore
         end
     end
     return best
@@ -2569,7 +2597,7 @@ do
     mkSlider(MT, "Mine Speed (hits/sec)", 1, 120, 20, C.ACNT, function(val)
         Mine.speed = 1 / val
     end)
-    mkSec(MT, "ORE FILTER") mkDropdown(MT, "Select Ores (all if none selected)", ALL_ORES, Mine.selected)
+    mkSec(MT, "ORE FILTER") mkDropdown(MT, "Select Ores (all if none selected)", ALL_ORES, Mine.selected, SelectedOresOrder)
 end
 
 -- =====================================================
