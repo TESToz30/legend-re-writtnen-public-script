@@ -38,10 +38,11 @@ local InstaPrompt = { on = false, conn = nil, prompts = {}, listConn = nil }
 local ESP = { players = false, mobs = false, playerColor = Color3.fromRGB(255, 255, 255), mobColor = Color3.fromRGB(255, 50, 50) }
 local Character = { autoAbility = false, infStam = false }
 local Gate = { on = false, thread = nil, rank = nil, gtype = nil, farmOn = false, farmMob = nil }
-local Mine = { on = false, thread = nil, current = nil, selected = {}, speed = 0.05 }
+local Mine = { on = false, thread = nil, current = nil, selected = {}, speed = 0.05, physicsMethod = false }
 local Harvest = { on = false, thread = nil, current = nil, selected = {} }
 local Raid   = { on = false, thread = nil, status = "Idle" }
-local RaidIC = { on = false, thread = nil }
+local RaidIC  = { on = false, thread = nil }
+local Follow  = { on = false, target = nil, thread = nil }
 local AutoRejoin = { on = false, world = 1, linkCode = "", placeId = 6198225400, mobs = {} }
 local SelectedMobs = {}
 local Hotkeys = {}
@@ -1206,22 +1207,59 @@ end
 -- =====================================================
 -- INVISIBILITY
 -- =====================================================
-Invisible = { on = false, originals = {} }
+Invisible = { on = false, originals = {}, conns = {} }
+
+local function applyInvisToObj(obj)
+    if obj:IsA("BasePart") or obj:IsA("Decal") or obj:IsA("SpecialMesh") or obj:IsA("SurfaceAppearance") then
+        if not Invisible.originals[obj] then
+            Invisible.originals[obj] = obj:IsA("BasePart") and obj.Transparency or 0
+        end
+        if obj:IsA("BasePart") then obj.Transparency = 1 end
+        if obj:IsA("Decal") then obj.Transparency = 1 end
+        if obj:IsA("SpecialMesh") then obj.MeshId = "" end
+    elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+        -- hide floating name / overhead UI
+        if not Invisible.originals[obj] then Invisible.originals[obj] = obj.Enabled end
+        obj.Enabled = false
+    elseif obj:IsA("Humanoid") then
+        if not Invisible.originals["displayName"] then Invisible.originals["displayName"] = obj.DisplayDistanceType end
+        obj.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    end
+end
+
 function setInvisible(val)
     Invisible.on = val
+    -- disconnect old ChildAdded watchers
+    for _, c in ipairs(Invisible.conns) do c:Disconnect() end
+    Invisible.conns = {}
+
     local char = LocalPlayer.Character
     if not char then return end
+
     if val then
         Invisible.originals = {}
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") or part:IsA("Decal") then
-                Invisible.originals[part] = part.Transparency
-                part.Transparency = 1
-            end
+        for _, obj in ipairs(char:GetDescendants()) do
+            applyInvisToObj(obj)
         end
+        -- catch accessories / tools equipped after invisibility turns on
+        local c1 = char.DescendantAdded:Connect(function(obj)
+            if Invisible.on then task.wait(0.05) applyInvisToObj(obj) end
+        end)
+        table.insert(Invisible.conns, c1)
     else
-        for part, t in pairs(Invisible.originals) do
-            if part and part.Parent then part.Transparency = t end
+        for obj, orig in pairs(Invisible.originals) do
+            pcall(function()
+                if type(obj) == "string" then
+                    -- display name restore
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum then hum.DisplayDistanceType = orig end
+                elseif obj and obj.Parent then
+                    if obj:IsA("BasePart") or obj:IsA("Decal") then obj.Transparency = orig
+                    elseif obj:IsA("SpecialMesh") then -- leave mesh id — restoring is tricky, respawn handles it
+                    elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then obj.Enabled = orig
+                    end
+                end
+            end)
         end
         Invisible.originals = {}
     end
@@ -1567,6 +1605,54 @@ mineLoop = function()
     Mine.current = nil
 end
 
+-- Mining Method 2: physics packet TP — instant move to each ore, no tween wait
+local mineLoop2 = function()
+    Mine.on = true
+    while Mine.on do
+        local ore = findOre()
+        if not ore then task.wait(COMBAT_CONFIG.Retry) continue end
+        local r = ore.PrimaryPart or ore:FindFirstChildWhichIsA("BasePart")
+        if not r then task.wait(1) continue end
+        Mine.current = ore.Name
+        local h = getHumanoidRootPart()
+        if h then
+            local dest = r.Position + Vector3.new(0, 3, 0)
+            local d = (h.Position - dest).Magnitude
+            if d > 8 then
+                local ok = pcall(function()
+                    raknet.stopphysics()
+                    raknet.sendphysics({ {
+                        ['Part'] = h,
+                        ['Attributes'] = {
+                            ['ReplicationPV'] = {
+                                ['Position'] = CFrame.new(dest),
+                                ['LinearVelocity'] = Vector3.new(0,0,0),
+                                ['AngularVelocity'] = Vector3.new(0,0,0)
+                            },
+                            ['PhysicsRepRootPart'] = { ['Part'] = h }
+                        }
+                    } })
+                    h.CFrame = CFrame.new(dest)
+                    raknet.startphysics()
+                end)
+                if not ok then
+                    -- fallback to tween if raknet unavailable
+                    local tw = TS:Create(h, TweenInfo.new(math.clamp(d / MOVEMENT_CONFIG.Speed, 0.05, 3), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(dest) })
+                    tw:Play() tw.Completed:Wait()
+                end
+            end
+        end
+        while Mine.on and ore and ore.Parent and oreAlive(ore) do
+            mineHit()
+            task.wait(Mine.speed)
+        end
+        Mine.current = nil
+        task.wait(0.2)
+    end
+    Mine.on = false
+    Mine.current = nil
+end
+
 -- =====================================================
 -- HARVESTING
 -- =====================================================
@@ -1812,10 +1898,33 @@ function teleportNextDoor()
     end
     local group = table.remove(doorCycle.list, 1)
     if not group then return end
-    -- Move to the interactive door only — one tween per group
+    -- Move to the interactive door — raknet instant TP with tween fallback
     local target = getInteractiveDoor(group)
     if target and target.part and target.part.Parent then
-        dungMoveTo(target.part)
+        local dest = target.part.Position + Vector3.new(0, DUNG_OFFSET or 3, 0)
+        local hrp = getHumanoidRootPart()
+        local rakOk = false
+        if hrp then
+            rakOk = pcall(function()
+                raknet.stopphysics()
+                raknet.sendphysics({
+                    {
+                        ['Part'] = hrp,
+                        ['Attributes'] = {
+                            ['ReplicationPV'] = {
+                                ['Position'] = CFrame.new(dest),
+                                ['LinearVelocity'] = Vector3.new(0, 0, 0),
+                                ['AngularVelocity'] = Vector3.new(0, 0, 0)
+                            },
+                            ['PhysicsRepRootPart'] = { ['Part'] = hrp }
+                        }
+                    }
+                })
+                hrp.CFrame = CFrame.new(dest)
+                raknet.startphysics()
+            end)
+        end
+        if not rakOk then dungMoveTo(target.part) end
         task.wait(0.15)
     end
     -- Fire all doors in the group (decorative ones are no-ops)
@@ -2294,40 +2403,56 @@ end
 -- =====================================================
 -- ANCHOR
 -- =====================================================
+local function anchorSendPacket(hrp, pos)
+    pcall(function()
+        raknet.sendphysics({ {
+            ['Part'] = hrp,
+            ['Attributes'] = {
+                ['ReplicationPV'] = {
+                    ['Position'] = CFrame.new(pos),
+                    ['LinearVelocity'] = Vector3.new(0, 0, 0),
+                    ['AngularVelocity'] = Vector3.new(0, 0, 0)
+                },
+                ['PhysicsRepRootPart'] = { ['Part'] = hrp }
+            }
+        } })
+    end)
+end
+
 function startAnchor()
     if Anchor.on then return end
     local hrp = getHumanoidRootPart()
     if not hrp then return end
     Anchor.on = true
     Anchor.pos = hrp.Position
-    -- Lock position every frame but preserve Y rotation so player can still look around
+    -- Stop physics replication so server holds our position cleanly
+    pcall(function() raknet.stopphysics() end)
+    anchorSendPacket(hrp, Anchor.pos)
+    -- Client-side visual lock (preserve Y rotation so player can still look around)
     Anchor.conn = RunService.Heartbeat:Connect(function()
         local h = getHumanoidRootPart()
         if not h then return end
         local _, yRot, _ = h.CFrame:ToEulerAnglesYXZ()
         h.CFrame = CFrame.new(Anchor.pos) * CFrame.fromEulerAnglesYXZ(0, yRot, 0)
-        -- zero velocity so physics doesn't fight us
-        local vel = h:FindFirstChildOfClass("BodyVelocity")
-        if not vel then
-            pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
-        end
+        pcall(function() h.AssemblyLinearVelocity = Vector3.zero end)
     end)
-    -- On respawn after death, tween back to anchor position
+    -- On respawn: instantly TP back via physics packet instead of slow tween
     local lp = game.Players.LocalPlayer
     lp.CharacterAdded:Connect(function(char)
         if not Anchor.on then return end
-        task.wait(1) -- wait for character to fully load
+        task.wait(0.5)
         local newHrp = char:WaitForChild("HumanoidRootPart", 5)
         if not newHrp then return end
-        local dist = (newHrp.Position - Anchor.pos).Magnitude
-        local tw = TS:Create(newHrp, TweenInfo.new(math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.5, 8), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(Anchor.pos) })
-        tw:Play()
+        newHrp.CFrame = CFrame.new(Anchor.pos)
+        pcall(function() raknet.stopphysics() end)
+        anchorSendPacket(newHrp, Anchor.pos)
     end)
 end
 function stopAnchor()
     Anchor.on = false
     Anchor.pos = nil
     if Anchor.conn then Anchor.conn:Disconnect() Anchor.conn = nil end
+    pcall(function() raknet.startphysics() end)
 end
 
 -- =====================================================
@@ -2508,6 +2633,122 @@ do
         Hitbox.size = val
         if Hitbox.on then applyHitboxes() end
     end)
+
+    -- ---- FOLLOW PLAYER ----
+    mkSec(CT, "FOLLOW PLAYER")
+
+    -- Player picker: dynamic list, single select
+    local followSelLbl = Instance.new("TextLabel")
+    followSelLbl.Size = UDim2.new(1, 0, 0, 26)
+    followSelLbl.BackgroundColor3 = C.PANEL followSelLbl.BorderSizePixel = 0
+    followSelLbl.Text = "Target: none"
+    followSelLbl.TextColor3 = C.SUB followSelLbl.TextSize = 10
+    followSelLbl.Font = Enum.Font.Gotham followSelLbl.Parent = CT
+    Instance.new("UICorner", followSelLbl).CornerRadius = UDim.new(0, 2)
+    local fslPad = Instance.new("UIPadding") fslPad.PaddingLeft = UDim.new(0, 8) fslPad.Parent = followSelLbl
+
+    -- Dropdown body (hidden until header clicked)
+    local fHdr = Instance.new("TextButton")
+    fHdr.Size = UDim2.new(1, 0, 0, 30) fHdr.BackgroundColor3 = C.PANEL fHdr.BorderSizePixel = 0
+    fHdr.Text = "Select Player  ▾" fHdr.TextColor3 = C.SUB fHdr.TextSize = 10
+    fHdr.Font = Enum.Font.Gotham fHdr.Parent = CT
+    Instance.new("UICorner", fHdr).CornerRadius = UDim.new(0, 2)
+
+    local fBody = Instance.new("Frame")
+    fBody.Size = UDim2.new(1, 0, 0, 0) fBody.AutomaticSize = Enum.AutomaticSize.Y
+    fBody.BackgroundColor3 = Color3.fromRGB(12, 12, 18) fBody.BorderSizePixel = 0
+    fBody.Visible = false fBody.Parent = CT
+    Instance.new("UICorner", fBody).CornerRadius = UDim.new(0, 2)
+    local fBL = Instance.new("UIListLayout", fBody) fBL.Padding = UDim.new(0, 2)
+    local fBPad = Instance.new("UIPadding") fBPad.PaddingTop = UDim.new(0, 4) fBPad.PaddingLeft = UDim.new(0, 4) fBPad.PaddingRight = UDim.new(0, 4) fBPad.PaddingBottom = UDim.new(0, 4) fBPad.Parent = fBody
+
+    local fOpen = false
+    fHdr.MouseButton1Click:Connect(function() fOpen = not fOpen fBody.Visible = fOpen fHdr.Text = "Select Player  " .. (fOpen and "▴" or "▾") end)
+
+    local function buildPlayerList()
+        -- clear existing rows
+        for _, c in ipairs(fBody:GetChildren()) do
+            if c:IsA("TextButton") then c:Destroy() end
+        end
+        for _, plr in ipairs(game.Players:GetPlayers()) do
+            if plr == LocalPlayer then continue end
+            local row = Instance.new("TextButton")
+            row.Size = UDim2.new(1, 0, 0, 28)
+            row.BackgroundColor3 = (Follow.target == plr) and C.PURP or C.OFF
+            row.BorderSizePixel = 0 row.Text = plr.Name
+            row.TextColor3 = (Follow.target == plr) and C.TXT or C.SUB
+            row.TextSize = 10 row.Font = Enum.Font.Gotham row.Parent = fBody
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 2)
+            row.MouseButton1Click:Connect(function()
+                Follow.target = (Follow.target == plr) and nil or plr
+                followSelLbl.Text = "Target: " .. (Follow.target and Follow.target.Name or "none")
+                buildPlayerList()
+            end)
+        end
+    end
+    buildPlayerList()
+    game.Players.PlayerAdded:Connect(buildPlayerList)
+    game.Players.PlayerRemoving:Connect(function(plr)
+        if Follow.target == plr then
+            Follow.target = nil
+            followSelLbl.Text = "Target: none"
+        end
+        task.wait(0.1) buildPlayerList()
+    end)
+    mkBtn(CT, "Refresh Players", buildPlayerList, C.PURP)
+
+    -- Follow loop
+    local function followLoop()
+        while Follow.on do
+            local tgt = Follow.target
+            if tgt and tgt.Character then
+                local tHrp = tgt.Character:FindFirstChild("HumanoidRootPart")
+                local myHrp = getHumanoidRootPart()
+                if tHrp and myHrp then
+                    local dest = tHrp.Position
+                    local dist = (myHrp.Position - dest).Magnitude
+                    if dist > 6 then
+                        -- try raknet instant TP, fall back to tween
+                        local rakOk = pcall(function()
+                            raknet.stopphysics()
+                            raknet.sendphysics({ {
+                                ['Part'] = myHrp,
+                                ['Attributes'] = {
+                                    ['ReplicationPV'] = {
+                                        ['Position'] = CFrame.new(dest),
+                                        ['LinearVelocity'] = Vector3.new(0,0,0),
+                                        ['AngularVelocity'] = Vector3.new(0,0,0)
+                                    },
+                                    ['PhysicsRepRootPart'] = { ['Part'] = myHrp }
+                                }
+                            } })
+                            myHrp.CFrame = CFrame.new(dest)
+                            raknet.startphysics()
+                        end)
+                        if not rakOk then
+                            local t = math.clamp(dist / MOVEMENT_CONFIG.Speed, 0.05, 3)
+                            local tw = TS:Create(myHrp, TweenInfo.new(t, MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(dest) })
+                            tw:Play() tw.Completed:Wait()
+                        end
+                    end
+                end
+            end
+            task.wait(0.2)
+        end
+    end
+
+    mkFarmToggle(CT, "Start Follow", "Stop Follow",
+        function() return Follow.on end,
+        function()
+            if Follow.on then return end
+            if not Follow.target then return end
+            Follow.on = true
+            Follow.thread = task.spawn(followLoop)
+        end,
+        function()
+            Follow.on = false
+            if Follow.thread then task.cancel(Follow.thread) Follow.thread = nil end
+        end)
 end
 
 -- =====================================================
@@ -2590,9 +2831,21 @@ do
     mkSec(MT, "STATUS") mineSt = mkStatus(MT)
     mkSec(MT, "AUTO MINE")
     mkFarmToggle(MT, "Start Auto Mine", "Stop Auto Mine",
-        function() return Mine.on end,
-        function() Mine.thread = task.spawn(mineLoop) end,
-        function() Mine.on = false if Mine.thread then task.cancel(Mine.thread) Mine.thread = nil end end)
+        function() return Mine.on and not Mine.physicsMethod end,
+        function()
+            if Mine.on then Mine.on = false if Mine.thread then task.cancel(Mine.thread) Mine.thread = nil end task.wait(0.1) end
+            Mine.physicsMethod = false
+            Mine.thread = task.spawn(mineLoop)
+        end,
+        function() Mine.on = false Mine.physicsMethod = false if Mine.thread then task.cancel(Mine.thread) Mine.thread = nil end end)
+    mkFarmToggle(MT, "Start Mining Method 2 (Physics TP)", "Stop Mining Method 2",
+        function() return Mine.on and Mine.physicsMethod end,
+        function()
+            if Mine.on then Mine.on = false if Mine.thread then task.cancel(Mine.thread) Mine.thread = nil end task.wait(0.1) end
+            Mine.physicsMethod = true
+            Mine.thread = task.spawn(mineLoop2)
+        end,
+        function() Mine.on = false Mine.physicsMethod = false if Mine.thread then task.cancel(Mine.thread) Mine.thread = nil end end)
     mkSec(MT, "SPEED")
     mkSlider(MT, "Mine Speed (hits/sec)", 1, 120, 20, C.ACNT, function(val)
         Mine.speed = 1 / val
