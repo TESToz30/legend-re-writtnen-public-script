@@ -40,7 +40,8 @@ local Character = { autoAbility = false, infStam = false }
 local Gate = { on = false, thread = nil, rank = nil, gtype = nil, farmOn = false, farmMob = nil }
 local Mine = { on = false, thread = nil, current = nil, selected = {}, speed = 0.05 }
 local Harvest = { on = false, thread = nil, current = nil, selected = {} }
-local Raid = { on = false, thread = nil, status = "Idle" }
+local Raid   = { on = false, thread = nil, status = "Idle" }
+local RaidIC = { on = false, thread = nil }
 local AutoRejoin = { on = false, world = 1, linkCode = "", placeId = 6198225400, mobs = {} }
 local SelectedMobs = {}
 local Hotkeys = {}
@@ -86,7 +87,7 @@ local AutoPotion = {
     ambrosia = { on = false, threshold = 0.50, lastUsed = 0, cooldown = 15 },
 }
 
--- (farmLoop, mineLoop, harvestLoop, autoChestLoop, autoDoorLoop, startUrukRaid, stopRaid assigned as globals below)
+-- (farmLoop, mineLoop, harvestLoop, autoChestLoop, autoDoorLoop, startUrukRaid, stopRaid, startInfinityCastleRaid, stopInfinityCastleRaid assigned as globals below)
 
 -- =====================================================
 -- SAVE SYSTEM
@@ -131,6 +132,13 @@ function captureState()
         harvestOn = Harvest.on, selectedHarvest = cp(Harvest.selected),
         autoChest = Dungeon.autoChest.on, autoDoor = Dungeon.autoDoor.on,
         potionThreshold = autoPotionThreshold,
+        autoPotOn = AutoPotion.on,
+        autoPotHpOn = AutoPotion.hp.on,
+        autoPotHpThresh = AutoPotion.hp.threshold,
+        autoPotAmbOn = AutoPotion.ambrosia.on,
+        autoPotAmbThresh = AutoPotion.ambrosia.threshold,
+        walkSpeedOn = WalkSpeed.on,
+        walkSpeed = WalkSpeed.speed,
         hotkeys = hkSave,
     }
 end
@@ -177,6 +185,15 @@ function applyPreset(pr)
     if pr.mineOn and not Mine.on and mineLoop then Mine.thread = task.spawn(mineLoop) end
     if pr.harvestOn and not Harvest.on and harvestLoop then Harvest.thread = task.spawn(harvestLoop) end
     if pr.autoChest and not Dungeon.autoChest.on and autoChestLoop then Dungeon.autoChest.thread = task.spawn(autoChestLoop) end
+    -- Char tab: potion toggles + walk speed
+    if pr.potionThreshold then autoPotionThreshold = pr.potionThreshold end
+    if pr.autoPotHpThresh then AutoPotion.hp.threshold = pr.autoPotHpThresh end
+    if pr.autoPotAmbThresh then AutoPotion.ambrosia.threshold = pr.autoPotAmbThresh end
+    if pr.walkSpeed then WalkSpeed.speed = pr.walkSpeed end
+    ss("autoPot",       pr.autoPotOn)
+    ss("autoPotHp",     pr.autoPotHpOn)
+    ss("autoPotAmb",    pr.autoPotAmbOn)
+    ss("walkSpeedOn",   pr.walkSpeedOn)
     if pr.autoDoor and not Dungeon.autoDoor.on and autoDoorLoop then Dungeon.autoDoor.thread = task.spawn(autoDoorLoop) end
 end
 
@@ -2403,14 +2420,14 @@ do
         if v then startAutoPotion() else stopAutoPotion() end
     end, "autoPot")
     mkPotionSlider(CT)
-    mkToggle(CT, "Auto IchorChalice (HP)", false, function(v)
+    ToggleSetters.autoPotHp = mkToggle(CT, "Auto IchorChalice (HP)", false, function(v)
         AutoPotion.hp.on = v
         if v and not AutoPotion.on then startAutoPotion() end
     end)
     mkSlider(CT, "IchorChalice HP Threshold", 10, 90, 40, C.RED, function(val)
         AutoPotion.hp.threshold = val / 100
     end)
-    mkToggle(CT, "Auto Ambrosia (Mana+Stam)", false, function(v)
+    ToggleSetters.autoPotAmb = mkToggle(CT, "Auto Ambrosia (Mana+Stam)", false, function(v)
         AutoPotion.ambrosia.on = v
         if v and not AutoPotion.on then startAutoPotion() end
     end)
@@ -2438,7 +2455,7 @@ do
     end)
     mkBtn(CT, "Force Clear VFX Now", function() disableVFX(LocalPlayer.Character) end, C.RED)
     mkSec(CT, "MOVEMENT")
-    mkToggle(CT, "Walk Speed Override", false, function(v) if v then startWalkSpeed() else stopWalkSpeed() end end)
+    ToggleSetters.walkSpeedOn = mkToggle(CT, "Walk Speed Override", false, function(v) if v then startWalkSpeed() else stopWalkSpeed() end end)
     mkSlider(CT, "Walk Speed", 16, 60, 24, C.ACNT, function(val) WalkSpeed.speed = val end)
     mkToggle(CT, "Anti-AFK", false, function(v) if v then startAntiAFK() else stopAntiAFK() end end)
     mkSec(CT, "COMBAT")
@@ -2713,9 +2730,253 @@ do
     local raidInfoLbl = Instance.new("TextLabel") raidInfoLbl.Size = UDim2.new(1, 0, 0, 36) raidInfoLbl.BackgroundColor3 = C.PANEL raidInfoLbl.BorderSizePixel = 0 raidInfoLbl.Text = "Opens Raids menu, selects Uruk, creates party if needed, then clicks Start." raidInfoLbl.TextColor3 = C.SUB raidInfoLbl.TextSize = 9 raidInfoLbl.Font = Enum.Font.Gotham raidInfoLbl.TextWrapped = true raidInfoLbl.TextXAlignment = Enum.TextXAlignment.Left raidInfoLbl.Parent = RT Instance.new("UICorner", raidInfoLbl).CornerRadius = UDim.new(0, 2)
     local rInfoPad = Instance.new("UIPadding") rInfoPad.PaddingLeft = UDim.new(0, 8) rInfoPad.PaddingTop = UDim.new(0, 4) rInfoPad.PaddingRight = UDim.new(0, 6) rInfoPad.Parent = raidInfoLbl
     mkFarmToggle(RT, "Start Uruk Auto-Ready", "Stop Uruk Auto-Ready", function() return Raid.on end, function() startUrukRaid() end, function() stopRaid() end)
-    mkBtn(RT, "Run Once", function()
-        if not Raid.on then Raid.on = true Raid.status = "Running..." task.spawn(function() doUrukRaid() end) end
-    end, C.PURP)
+
+    -- ---- INFINITY CASTLE RAID ----
+    -- NOTE: GUI paths below are best guesses. Run VS_GUIRecorder.lua while the
+    -- Raids menu is open to confirm exact button/frame names, then update here.
+    -- Paths confirmed via GUIRecorder:
+    -- Raids button: Opening > GameOptions > Raids
+    -- Frame:        Opening > RaidFrame > InfinityDungeonFrame
+    -- No tab-select click needed — frame is accessible directly after opening Raids
+
+    local function doInfinityCastleRaid()
+        Raid.status = "IC: Opening Raids menu..."
+        local opening = playerGui:WaitForChild("Opening", 10)
+        if not opening then Raid.status = "IC ERR: Opening GUI not found" return end
+        local raidsBtn = raidWaitPath(opening, { "GameOptions", "Raids" })
+        if not raidsBtn then Raid.status = "IC ERR: Raids button not found" return end
+        raidClickButton(raidsBtn) task.wait(0.5)
+        Raid.status = "IC: Finding InfinityDungeonFrame..."
+        local icFrame = raidWaitPath(opening, { "RaidFrame", "InfinityDungeonFrame" })
+        if not icFrame then Raid.status = "IC ERR: InfinityDungeonFrame not found" return end
+        -- Create party if not already in one
+        local createBtn = icFrame:FindFirstChild("Create")
+        if createBtn and createBtn.Visible then
+            Raid.status = "IC: Creating party..."
+            raidClickButton(createBtn) task.wait(1)
+        end
+        Raid.status = "IC: Waiting for Start..."
+        local startBtn = icFrame:FindFirstChild("Start")
+        local waited = 0
+        while startBtn and not startBtn.Visible and waited < 30 do task.wait(0.25) waited += 0.25 end
+        if startBtn and startBtn.Visible then
+            raidClickButton(startBtn)
+            Raid.status = "IC: Started!"
+            print("[VS Raid] Infinity Castle raid started")
+        else
+            Raid.status = "IC ERR: Start btn never appeared"
+        end
+        RaidIC.on = false
+        Raid.on = false
+    end
+
+    startInfinityCastleRaid = function()
+        if Raid.on then return end
+        Raid.on = true RaidIC.on = true Raid.status = "IC: Starting..."
+        RaidIC.thread = task.spawn(function()
+            while RaidIC.on do doInfinityCastleRaid() if RaidIC.on then task.wait(3) end end
+        end)
+    end
+    stopInfinityCastleRaid = function()
+        RaidIC.on = false Raid.on = false
+        if RaidIC.thread then task.cancel(RaidIC.thread) RaidIC.thread = nil end
+        Raid.status = "Idle"
+    end
+
+    mkSec(RT, "INFINITY CASTLE RAID")
+    local icInfoLbl = Instance.new("TextLabel") icInfoLbl.Size = UDim2.new(1, 0, 0, 36) icInfoLbl.BackgroundColor3 = C.PANEL icInfoLbl.BorderSizePixel = 0 icInfoLbl.Text = "Opens Raids menu, selects Infinity Castle, creates party if needed, then clicks Start." icInfoLbl.TextColor3 = C.SUB icInfoLbl.TextSize = 9 icInfoLbl.Font = Enum.Font.Gotham icInfoLbl.TextWrapped = true icInfoLbl.TextXAlignment = Enum.TextXAlignment.Left icInfoLbl.Parent = RT Instance.new("UICorner", icInfoLbl).CornerRadius = UDim.new(0, 2)
+    local icInfoPad = Instance.new("UIPadding") icInfoPad.PaddingLeft = UDim.new(0, 8) icInfoPad.PaddingTop = UDim.new(0, 4) icInfoPad.PaddingRight = UDim.new(0, 6) icInfoPad.Parent = icInfoLbl
+    mkFarmToggle(RT, "Start IC Auto-Ready", "Stop IC Auto-Ready", function() return RaidIC.on end, function() startInfinityCastleRaid() end, function() stopInfinityCastleRaid() end)
+
+    -- ---- INFINITY CASTLE DUNGEON RUNNER ----
+    local ICRun = { on = false, thread = nil, step = "Idle" }
+
+    -- Waypoints — edit positions or add more steps here
+    -- preKey: press this key before attacking (e.g. "6" to equip hotbar slot 6)
+    local IC_WAYPOINTS = {
+        { pos = Vector3.new(415.166,  722.559,  108.832),  action = "fight",     label = "Area 1 NPCs",  radius = 120, timeout = 90,  preKey = "6" },
+        { pos = Vector3.new(359.522, -346.543, 1448.378),  action = "fight",     label = "Mini Boss 1",  radius = 60,  timeout = 120 },
+        { pos = Vector3.new(-690.507,-136.743,  677.758),  action = "touch",     label = "Start MB 2",   waitAfter = 5, promptRadius = 40, radius = 80, timeout = 120 },
+        { pos = Vector3.new(717.564,  331.790,   26.768),  action = "kill_zone", label = "NPC Group",    radius = 120, timeout = 90  },
+        { pos = Vector3.new(397.976, -425.047,   80.718),  action = "fight",     label = "Mini Boss 3",  radius = 60,  timeout = 120 },
+        { pos = Vector3.new(1001.510, 311.071,   32.615),  action = "move",      label = "Final Pos" },
+    }
+
+    -- Press a keyboard key via VirtualUser (e.g. "6" to equip hotbar slot 6)
+    local function icPressKey(key)
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            vu:KeyDown(key)
+            task.wait(0.1)
+            vu:KeyUp(key)
+            task.wait(0.2)
+        end)
+    end
+
+    -- Fire the nearest ProximityPrompt within radius of a position
+    local function icFireNearbyPrompt(center, radius)
+        local best, bd = nil, math.huge
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") then
+                local part = obj.Parent
+                if part and part:IsA("BasePart") then
+                    local d = (part.Position - center).Magnitude
+                    if d < bd and d <= (radius or 30) then bd = d best = obj end
+                end
+            end
+        end
+        if best then
+            pcall(function() best.HoldDuration = 0 end)
+            pcall(function() fireproximityprompt(best) end)
+            print("[VS IC] Fired proximity prompt: " .. best.Parent.Name)
+            return true
+        end
+        -- fallback: ClickDetector
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ClickDetector") then
+                local part = obj.Parent
+                if part and part:IsA("BasePart") then
+                    local d = (part.Position - center).Magnitude
+                    if d <= (radius or 30) then
+                        pcall(function() fireclickdetector(obj) end)
+                        print("[VS IC] Fired click detector: " .. part.Name)
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    -- Left-click at screen center via VirtualUser
+    local function icLeftClick()
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            local center = workspace.CurrentCamera.ViewportSize / 2
+            vu:Button1Down(center, workspace.CurrentCamera.CFrame)
+            task.wait(0.05)
+            vu:Button1Up(center, workspace.CurrentCamera.CFrame)
+        end)
+    end
+
+    -- Move HRP to a Vector3
+    local function icMoveTo(v3)
+        local hrp = getHumanoidRootPart()
+        if not hrp then return end
+        local d = (hrp.Position - v3).Magnitude
+        local tw = TS:Create(hrp, TweenInfo.new(math.clamp(d / MOVEMENT_CONFIG.Speed, 0.5, 20), MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(v3) })
+        tw:Play()
+        tw.Completed:Wait()
+    end
+
+    -- Find all living mobs within radius of a position (uses game's own isAlive + workspace.Mobs)
+    local function icMobsNear(center, radius)
+        local found = {}
+        local mobFolder = workspace:FindFirstChild("Mobs")
+        if not mobFolder then return found end
+        for _, m in ipairs(mobFolder:GetChildren()) do
+            if m:IsA("Model") and isAlive(m) then
+                local r = getRootPart(m)
+                if r and (r.Position - center).Magnitude <= radius then
+                    table.insert(found, m)
+                end
+            end
+        end
+        return found
+    end
+
+    -- Attack loop: move to each mob and attack until zone is clear or timeout
+    local function icFightAt(center, radius, timeout)
+        local deadline = tick() + (timeout or 120)
+        while ICRun.on and tick() < deadline do
+            local mobs = icMobsNear(center, radius)
+            if #mobs == 0 then break end
+            -- Find nearest alive mob
+            local nearest, nd = nil, math.huge
+            for _, m in ipairs(mobs) do
+                local r = getRootPart(m)
+                if r then
+                    local d = (r.Position - center).Magnitude
+                    if d < nd then nd = d nearest = m end
+                end
+            end
+            if nearest then
+                local r = getRootPart(nearest)
+                if r then
+                    -- Move close enough to attack
+                    icMoveTo(r.Position + Vector3.new(0, HOVER or 5, 0))
+                    task.wait(0.05)
+                    attackMob(nearest)
+                end
+            end
+            task.wait(COMBAT_CONFIG.Cooldown)
+        end
+    end
+
+    local function doICRun()
+        for i, wp in ipairs(IC_WAYPOINTS) do
+            if not ICRun.on then return end
+            ICRun.step = "[" .. i .. "/" .. #IC_WAYPOINTS .. "] " .. wp.label
+            Raid.status = "IC Run: " .. ICRun.step
+            print("[VS IC] Step " .. i .. ": " .. wp.label .. " (" .. wp.action .. ")")
+
+            if wp.action == "move" then
+                icMoveTo(wp.pos)
+
+            elseif wp.action == "touch" then
+                -- Move to position, fire nearby proximity prompt, then fight spawned boss
+                icMoveTo(wp.pos)
+                task.wait(0.5)
+                local fired = icFireNearbyPrompt(wp.pos, wp.promptRadius or 40)
+                if not fired then
+                    local hrp2 = getHumanoidRootPart()
+                    if hrp2 then fired = icFireNearbyPrompt(hrp2.Position, 60) end
+                end
+                task.wait(wp.waitAfter or 3)
+                if wp.fightAfter ~= false then
+                    icFightAt(wp.pos, wp.radius or 80, wp.timeout or 120)
+                end
+
+            elseif wp.action == "fight" then
+                icMoveTo(wp.pos)
+                task.wait(0.5)
+                if wp.preKey then icPressKey(wp.preKey) task.wait(0.1) icLeftClick() task.wait(0.2) end
+                icFightAt(wp.pos, wp.radius or 60, wp.timeout or 120)
+
+            elseif wp.action == "kill_zone" then
+                icMoveTo(wp.pos)
+                task.wait(0.5)
+                if wp.preKey then icPressKey(wp.preKey) task.wait(0.1) icLeftClick() task.wait(0.2) end
+                icFightAt(wp.pos, wp.radius or 120, wp.timeout or 90)
+            end
+
+            task.wait(0.5)
+        end
+        ICRun.step = "Done"
+        Raid.status = "IC Run: Done"
+        print("[VS IC] Dungeon run complete")
+        ICRun.on = false
+    end
+
+    mkSec(RT, "INFINITY CASTLE AUTO-RUN")
+    local icRunStLbl = mkStatus(RT)
+    RunService.Heartbeat:Connect(function()
+        if icRunStLbl then icRunStLbl.Text = "IC Run: " .. (ICRun.on and ICRun.step or "Off") end
+    end)
+    mkFarmToggle(RT, "Start IC Auto-Run", "Stop IC Auto-Run",
+        function() return ICRun.on end,
+        function()
+            if ICRun.on then return end
+            ICRun.on = true
+            ICRun.thread = task.spawn(function()
+                while ICRun.on do doICRun() if ICRun.on then task.wait(5) end end
+            end)
+        end,
+        function()
+            ICRun.on = false
+            if ICRun.thread then task.cancel(ICRun.thread) ICRun.thread = nil end
+            ICRun.step = "Idle"
+        end)
 end
 
 -- =====================================================
