@@ -58,6 +58,8 @@ local KillAura   = { on = false, conn = nil, radius = 30 }
 local WalkSpeed  = { on = false, conn = nil, speed = 24 }
 local AntiAFK    = { on = false, conn = nil }
 local AutoBlock  = { on = false, conn = nil, lastHp = 1, threshold = 0.15 }
+local AutoMagic  = { on = false, rate = 0.05 }  -- left click stream
+local AutoWeapon = { on = false, rate = 0.05 }  -- right click stream
 local Anchor     = { on = false, pos = nil, conn = nil }
 
 local SelectedMobsOrder = {}
@@ -1126,6 +1128,66 @@ function enterGate(g)
     end)
 end
 
+local SAFE_GATE_DEPTH  = -120  -- Y level to travel underground/underwater
+local SAFE_GATE_RADIUS = 100   -- horizontal distance at which to rise up
+
+function enterGateSafe(g)
+    if currentGateTween then pcall(function() currentGateTween:Cancel() end) currentGateTween = nil end
+    if currentGateThread then task.cancel(currentGateThread) currentGateThread = nil end
+    currentGateThread = task.spawn(function()
+        local h = getHumanoidRootPart()
+        if not h then return end
+        local gatePos = g.part.Position
+
+        -- Step 1: Sink underground at current XZ position
+        local sinkPos = Vector3.new(h.Position.X, SAFE_GATE_DEPTH, h.Position.Z)
+        local sinkDist = math.abs(h.Position.Y - SAFE_GATE_DEPTH)
+        local sinkTime = math.clamp(sinkDist / MOVEMENT_CONFIG.Speed, 0.05, 3)
+        currentGateTween = TS:Create(h, TweenInfo.new(sinkTime, MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(sinkPos) })
+        currentGateTween:Play()
+        currentGateTween.Completed:Wait()
+        currentGateTween = nil
+
+        -- Step 2: Tween underground toward gate XZ until within SAFE_GATE_RADIUS studs
+        local underGatePos = Vector3.new(gatePos.X, SAFE_GATE_DEPTH, gatePos.Z)
+        local curr = getHumanoidRootPart()
+        if not curr then currentGateThread = nil return end
+        local horizDist = (Vector3.new(curr.Position.X, 0, curr.Position.Z) - Vector3.new(gatePos.X, 0, gatePos.Z)).Magnitude
+        if horizDist > SAFE_GATE_RADIUS then
+            -- Travel underground to a point SAFE_GATE_RADIUS studs away from gate XZ
+            local dir = (Vector3.new(gatePos.X, 0, gatePos.Z) - Vector3.new(curr.Position.X, 0, curr.Position.Z)).Unit
+            local stopXZ = Vector3.new(gatePos.X, 0, gatePos.Z) - dir * (SAFE_GATE_RADIUS - 5)
+            local approachPos = Vector3.new(stopXZ.X, SAFE_GATE_DEPTH, stopXZ.Z)
+            local approachDist = (curr.Position - approachPos).Magnitude
+            local approachTime = math.clamp(approachDist / MOVEMENT_CONFIG.Speed, 0.1, 10)
+            currentGateTween = TS:Create(curr, TweenInfo.new(approachTime, MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(approachPos) })
+            currentGateTween:Play()
+            currentGateTween.Completed:Wait()
+            currentGateTween = nil
+        end
+
+        -- Step 3: Rise vertically to gate
+        curr = getHumanoidRootPart()
+        if not curr then currentGateThread = nil return end
+        local riseTarget = gatePos + Vector3.new(0, 5, 0)
+        local riseDist = (curr.Position - riseTarget).Magnitude
+        local riseTime = math.clamp(riseDist / MOVEMENT_CONFIG.Speed, 0.05, 5)
+        currentGateTween = TS:Create(curr, TweenInfo.new(riseTime, MOVEMENT_CONFIG.Style, MOVEMENT_CONFIG.Direction), { CFrame = CFrame.new(riseTarget) })
+        currentGateTween:Play()
+        currentGateTween.Completed:Wait()
+        currentGateTween = nil
+
+        -- Step 4: Fire join/ready remotes
+        task.wait(0.3)
+        local jp = g.part:FindFirstChild("JoinParty")
+        local rt = g.part:FindFirstChild("ReadyTag")
+        if jp then jp:FireServer() end
+        task.wait(0.5)
+        if rt then rt:FireServer() end
+        currentGateThread = nil
+    end)
+end
+
 -- =====================================================
 -- ESP
 -- =====================================================
@@ -1202,6 +1264,60 @@ end
 function stopAutoAbility()
     Character.autoAbility = false
     stopTh("ab")
+end
+
+function startAutoMagic()
+    stopTh("magic")
+    AutoMagic.on = true
+    threads["magic"] = task.spawn(function()
+        local vu = game:GetService("VirtualUser")
+        local cam = workspace.CurrentCamera
+        while AutoMagic.on do
+            local sp = cam.ViewportSize / 2
+            pcall(function()
+                vu:Button1Down(sp, cam.CFrame)
+                task.wait(AutoMagic.rate)
+                vu:Button1Up(sp, cam.CFrame)
+            end)
+            task.wait(AutoMagic.rate)
+        end
+    end)
+end
+function stopAutoMagic()
+    AutoMagic.on = false
+    stopTh("magic")
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        local cam = workspace.CurrentCamera
+        vu:Button1Up(cam.ViewportSize / 2, cam.CFrame)
+    end)
+end
+
+function startAutoWeapon()
+    stopTh("weapon")
+    AutoWeapon.on = true
+    threads["weapon"] = task.spawn(function()
+        local vu = game:GetService("VirtualUser")
+        local cam = workspace.CurrentCamera
+        while AutoWeapon.on do
+            local sp = cam.ViewportSize / 2
+            pcall(function()
+                vu:Button2Down(sp, cam.CFrame)
+                task.wait(AutoWeapon.rate)
+                vu:Button2Up(sp, cam.CFrame)
+            end)
+            task.wait(AutoWeapon.rate)
+        end
+    end)
+end
+function stopAutoWeapon()
+    AutoWeapon.on = false
+    stopTh("weapon")
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        local cam = workspace.CurrentCamera
+        vu:Button2Up(cam.ViewportSize / 2, cam.CFrame)
+    end)
 end
 
 -- =====================================================
@@ -2028,7 +2144,7 @@ Logo.Visible = false Logo.Parent = SG
 Instance.new("UICorner", Logo).CornerRadius = UDim.new(0, 4)
 
 local Main = Instance.new("Frame")
-Main.Size = UDim2.new(0, 860, 0, 560) Main.Position = UDim2.new(0.5, -430, 0.5, -280)
+Main.Size = UDim2.new(0, 688, 0, 560) Main.Position = UDim2.new(0.5, -344, 0.5, -280)
 Main.BackgroundColor3 = C.BG Main.BorderSizePixel = 0 Main.ClipsDescendants = true Main.Parent = SG
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 4)
 local ePos = Main.Position
@@ -2560,10 +2676,66 @@ end
 -- CHAR TAB  (FIX: single do/end wrapping all CT content)
 -- =====================================================
 do
+    -- Search bar (must be first child so UIListLayout puts it at top)
+    local searchFrame = Instance.new("Frame")
+    searchFrame.Name = "_CTSearch"
+    searchFrame.Size = UDim2.new(1, 0, 0, 30)
+    searchFrame.BackgroundColor3 = C.PANEL
+    searchFrame.BorderSizePixel = 0
+    searchFrame.Parent = CT
+    Instance.new("UICorner", searchFrame).CornerRadius = UDim.new(0, 4)
+
+    local searchBox = Instance.new("TextBox")
+    searchBox.Size = UDim2.new(1, -10, 1, -6)
+    searchBox.Position = UDim2.new(0, 5, 0, 3)
+    searchBox.BackgroundTransparency = 1
+    searchBox.PlaceholderText = "Search..."
+    searchBox.PlaceholderColor3 = C.SUB
+    searchBox.Text = ""
+    searchBox.TextColor3 = C.TXT
+    searchBox.TextSize = 11
+    searchBox.Font = Enum.Font.Gotham
+    searchBox.TextXAlignment = Enum.TextXAlignment.Left
+    searchBox.ClearTextOnFocus = false
+    searchBox.Parent = searchFrame
+
+    searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local query = searchBox.Text:lower()
+        for _, child in ipairs(CT:GetChildren()) do
+            if child:IsA("Frame") and child.Name ~= "_CTSearch" then
+                if query == "" then
+                    child.Visible = true
+                else
+                    -- Check if any TextLabel in this child contains the query
+                    local match = false
+                    for _, lbl in ipairs(child:GetDescendants()) do
+                        if lbl:IsA("TextLabel") and lbl.Text:lower():find(query, 1, true) then
+                            match = true
+                            break
+                        end
+                    end
+                    child.Visible = match
+                end
+            end
+        end
+    end)
+
     mkSec(CT, "ABILITIES")
     ToggleSetters.autoAb = mkToggle(CT, "Auto Abilities (1,2,3,6)", false, function(v)
         if v then startAutoAbility() else stopAutoAbility() end
     end, "autoAb")
+    mkToggle(CT, "Auto Magic (Left Click Stream)", false, function(v)
+        if v then startAutoMagic() else stopAutoMagic() end
+    end)
+    mkSlider(CT, "Magic Fire Rate (clicks/sec)", 1, 60, 20, C.ACNT, function(val)
+        AutoMagic.rate = 1 / val
+    end)
+    mkToggle(CT, "Auto Weapon (Right Click Stream)", false, function(v)
+        if v then startAutoWeapon() else stopAutoWeapon() end
+    end)
+    mkSlider(CT, "Weapon Fire Rate (clicks/sec)", 1, 60, 20, C.ACNT, function(val)
+        AutoWeapon.rate = 1 / val
+    end)
     mkSec(CT, "STAMINA")
     ToggleSetters.infStam = mkToggle(CT, "Infinite Stamina", false, function(v)
         if v then startInfStam() else stopInfStam() end
@@ -2607,10 +2779,26 @@ do
         if v then startVFXReducer() else stopVFXReducer() end
     end)
     mkBtn(CT, "Force Clear VFX Now", function() disableVFX(LocalPlayer.Character) end, C.RED)
+    mkSec(CT, "PERFORMANCE")
+    mkBtn(CT, "Strip World Textures (irreversible)", function()
+        local stripped = 0
+        for _, v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("Decal") or v:IsA("Texture") or v:IsA("SurfaceAppearance") then
+                v:Destroy()
+                stripped = stripped + 1
+            end
+        end
+        -- Watch for anything that loads in after (streaming, NPCs spawning, etc.)
+        workspace.DescendantAdded:Connect(function(v)
+            if v:IsA("Decal") or v:IsA("Texture") or v:IsA("SurfaceAppearance") then
+                v:Destroy()
+            end
+        end)
+        print("[VS] Stripped " .. stripped .. " textures. Rejoin to restore.")
+    end, C.RED)
     mkSec(CT, "MOVEMENT")
     ToggleSetters.walkSpeedOn = mkToggle(CT, "Walk Speed Override", false, function(v) if v then startWalkSpeed() else stopWalkSpeed() end end)
     mkSlider(CT, "Walk Speed", 16, 60, 24, C.ACNT, function(val) WalkSpeed.speed = val end)
-    mkToggle(CT, "Anti-AFK", false, function(v) if v then startAntiAFK() else stopAntiAFK() end end)
     mkSec(CT, "COMBAT")
     mkToggle(CT, "Auto Block / Dodge", false, function(v) if v then startAutoBlock() else stopAutoBlock() end end)
     mkSlider(CT, "Block Trigger (HP drop %)", 5, 40, 15, C.RED, function(val) AutoBlock.threshold = val / 100 end)
@@ -2749,6 +2937,197 @@ do
             Follow.on = false
             if Follow.thread then task.cancel(Follow.thread) Follow.thread = nil end
         end)
+
+    -- ---- SILENT AIM ----
+    mkSec(CT, "SILENT AIM")
+
+    local SilentAim = { on = false, fov = 60, part = "Head", conn = nil }
+    local SA_PARTS = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" }
+    local SA_PARTS_STATE = {}
+
+    local function getSilentAimTarget()
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local camCF = cam.CFrame
+        local camDir = camCF.LookVector
+        local best, bestDot = nil, math.cos(math.rad(SilentAim.fov / 2))
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p == LocalPlayer then continue end
+            local char = p.Character
+            if not char then continue end
+            local part = char:FindFirstChild(SilentAim.part)
+                      or char:FindFirstChild("HumanoidRootPart")
+            if not part then continue end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health <= 0 then continue end
+            local dir = (part.Position - camCF.Position).Unit
+            local dot = camDir:Dot(dir)
+            if dot > bestDot then
+                bestDot = dot
+                best = part
+            end
+        end
+        return best
+    end
+
+    local function startSilentAim()
+        if SilentAim.conn then return end
+        SilentAim.on = true
+        SilentAim.conn = RunService.RenderStepped:Connect(function()
+            if not SilentAim.on then return end
+            local target = getSilentAimTarget()
+            if not target then return end
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local origin = cam.CFrame.Position
+            local dir = (target.Position - origin).Unit
+            local right = Vector3.new(0, 1, 0):Cross(dir).Unit
+            local up = dir:Cross(right).Unit
+            cam.CFrame = CFrame.fromMatrix(origin, right, up)
+        end)
+    end
+
+    local function stopSilentAim()
+        SilentAim.on = false
+        if SilentAim.conn then SilentAim.conn:Disconnect() SilentAim.conn = nil end
+    end
+
+    mkToggle(CT, "Silent Aim", false, function(v)
+        if v then startSilentAim() else stopSilentAim() end
+    end)
+    mkSlider(CT, "Silent Aim FOV (degrees)", 1, 180, 60, C.ACNT, function(val)
+        SilentAim.fov = val
+    end)
+    -- Body part dropdown (single select — clicking one deselects others)
+    do
+        local saSecLbl = Instance.new("TextLabel")
+        saSecLbl.Size = UDim2.new(1, 0, 0, 18) saSecLbl.BackgroundTransparency = 1
+        saSecLbl.Text = "AIM PART" saSecLbl.TextColor3 = C.SUB saSecLbl.TextSize = 9
+        saSecLbl.Font = Enum.Font.GothamBold saSecLbl.TextXAlignment = Enum.TextXAlignment.Left
+        saSecLbl.Parent = CT
+
+        local saRow = Instance.new("Frame")
+        saRow.Size = UDim2.new(1, 0, 0, 30) saRow.BackgroundTransparency = 1 saRow.Parent = CT
+        local saLayout = Instance.new("UIListLayout")
+        saLayout.FillDirection = Enum.FillDirection.Horizontal
+        saLayout.Padding = UDim.new(0, 4) saLayout.Parent = saRow
+
+        local saBtns = {}
+        for _, partName in ipairs(SA_PARTS) do
+            local isDefault = (partName == "Head")
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(0.23, -3, 1, 0)
+            btn.BackgroundColor3 = isDefault and C.PURP or C.OFF
+            btn.BorderSizePixel = 0
+            btn.Text = partName == "HumanoidRootPart" and "Root" or partName
+            btn.TextColor3 = isDefault and C.TXT or C.SUB
+            btn.TextSize = 9 btn.Font = Enum.Font.GothamSemibold
+            btn.Parent = saRow
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 2)
+            saBtns[partName] = btn
+            btn.MouseButton1Click:Connect(function()
+                SilentAim.part = partName
+                for pn, pb in pairs(saBtns) do
+                    TS:Create(pb, TweenInfo.new(0.1), { BackgroundColor3 = pn == partName and C.PURP or C.OFF }):Play()
+                    pb.TextColor3 = pn == partName and C.TXT or C.SUB
+                end
+            end)
+        end
+    end
+
+    -- ---- MOB SILENT AIM ----
+    mkSec(CT, "MOB SILENT AIM")
+
+    local MobSilentAim = { on = false, fov = 60, part = "Head", conn = nil }
+    local MSA_PARTS = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" }
+
+    local function getMobSilentAimTarget()
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local camCF = cam.CFrame
+        local camDir = camCF.LookVector
+        local best, bestDot = nil, math.cos(math.rad(MobSilentAim.fov / 2))
+        local mobFolder = workspace:FindFirstChild("Mobs")
+        if not mobFolder then return nil end
+        for _, mob in ipairs(mobFolder:GetChildren()) do
+            if not mob:IsA("Model") or not isAlive(mob) then continue end
+            local part = mob:FindFirstChild(MobSilentAim.part)
+                      or mob:FindFirstChild("HumanoidRootPart")
+                      or getRootPart(mob)
+            if not part then continue end
+            local dir = (part.Position - camCF.Position).Unit
+            local dot = camDir:Dot(dir)
+            if dot > bestDot then
+                bestDot = dot
+                best = part
+            end
+        end
+        return best
+    end
+
+    local function startMobSilentAim()
+        if MobSilentAim.conn then return end
+        MobSilentAim.on = true
+        MobSilentAim.conn = RunService.RenderStepped:Connect(function()
+            if not MobSilentAim.on then return end
+            local target = getMobSilentAimTarget()
+            if not target then return end
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local origin = cam.CFrame.Position
+            local dir = (target.Position - origin).Unit
+            local right = Vector3.new(0, 1, 0):Cross(dir).Unit
+            local up = dir:Cross(right).Unit
+            cam.CFrame = CFrame.fromMatrix(origin, right, up)
+        end)
+    end
+
+    local function stopMobSilentAim()
+        MobSilentAim.on = false
+        if MobSilentAim.conn then MobSilentAim.conn:Disconnect() MobSilentAim.conn = nil end
+    end
+
+    mkToggle(CT, "Mob Silent Aim", false, function(v)
+        if v then startMobSilentAim() else stopMobSilentAim() end
+    end)
+    mkSlider(CT, "Mob Silent Aim FOV (degrees)", 1, 180, 60, C.ACNT, function(val)
+        MobSilentAim.fov = val
+    end)
+    do
+        local msaLbl = Instance.new("TextLabel")
+        msaLbl.Size = UDim2.new(1, 0, 0, 18) msaLbl.BackgroundTransparency = 1
+        msaLbl.Text = "MOB AIM PART" msaLbl.TextColor3 = C.SUB msaLbl.TextSize = 9
+        msaLbl.Font = Enum.Font.GothamBold msaLbl.TextXAlignment = Enum.TextXAlignment.Left
+        msaLbl.Parent = CT
+
+        local msaRow = Instance.new("Frame")
+        msaRow.Size = UDim2.new(1, 0, 0, 30) msaRow.BackgroundTransparency = 1 msaRow.Parent = CT
+        local msaLayout = Instance.new("UIListLayout")
+        msaLayout.FillDirection = Enum.FillDirection.Horizontal
+        msaLayout.Padding = UDim.new(0, 4) msaLayout.Parent = msaRow
+
+        local msaBtns = {}
+        for _, partName in ipairs(MSA_PARTS) do
+            local isDefault = (partName == "Head")
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(0.23, -3, 1, 0)
+            btn.BackgroundColor3 = isDefault and C.PURP or C.OFF
+            btn.BorderSizePixel = 0
+            btn.Text = partName == "HumanoidRootPart" and "Root" or partName
+            btn.TextColor3 = isDefault and C.TXT or C.SUB
+            btn.TextSize = 9 btn.Font = Enum.Font.GothamSemibold
+            btn.Parent = msaRow
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 2)
+            msaBtns[partName] = btn
+            btn.MouseButton1Click:Connect(function()
+                MobSilentAim.part = partName
+                for pn, pb in pairs(msaBtns) do
+                    TS:Create(pb, TweenInfo.new(0.1), { BackgroundColor3 = pn == partName and C.PURP or C.OFF }):Play()
+                    pb.TextColor3 = pn == partName and C.TXT or C.SUB
+                end
+            end)
+        end
+    end
 end
 
 -- =====================================================
@@ -2765,7 +3144,7 @@ do
                 while Gate.on do
                     local g = findGate()
                     if not g then task.wait(10) continue end
-                    enterGate(g)
+                    if Gate.safeEntry then enterGateSafe(g) else enterGate(g) end
                     task.wait(300)
                 end
                 Gate.on = false
@@ -2775,6 +3154,15 @@ do
             Gate.on = false
             if Gate.thread then task.cancel(Gate.thread) Gate.thread = nil end
         end)
+    mkToggle(GT, "Safe Gate Entry (Underground Approach)", false, function(v)
+        Gate.safeEntry = v
+    end)
+    mkSlider(GT, "Underground Depth", -300, -20, -120, C.ACNT, function(val)
+        SAFE_GATE_DEPTH = val
+    end)
+    mkSlider(GT, "Rise Radius (studs from gate)", 30, 200, 100, C.ACNT, function(val)
+        SAFE_GATE_RADIUS = val
+    end)
     mkSec(GT, "RANK FILTER")
     local rkLbl = Instance.new("TextLabel") rkLbl.Size = UDim2.new(1, 0, 0, 24) rkLbl.BackgroundColor3 = C.PANEL rkLbl.BorderSizePixel = 0 rkLbl.Text = "Rank: Any" rkLbl.TextColor3 = C.TXT rkLbl.TextSize = 10 rkLbl.Font = Enum.Font.Gotham rkLbl.Parent = GT Instance.new("UICorner", rkLbl).CornerRadius = UDim.new(0, 2)
     local rkRow = Instance.new("Frame") rkRow.Size = UDim2.new(1, 0, 0, 32) rkRow.BackgroundTransparency = 1 rkRow.Parent = GT
@@ -2814,7 +3202,7 @@ do
         local label = gtype == nil and "Any" or (gtype == "BlueGate" and "Blue" or "Red")
         if gateTypeBtnMap[label] then TS:Create(gateTypeBtnMap[label], TweenInfo.new(0.1), { BackgroundColor3 = C.ACNT }):Play() gateTypeBtnMap[label].TextColor3 = C.TXT end
     end
-    mkBtn(GT, "Enter Nearest Gate Now", function() local g = findGate() if g then enterGate(g) end end, C.GOLD)
+    mkBtn(GT, "Enter Nearest Gate Now", function() local g = findGate() if g then if Gate.safeEntry then enterGateSafe(g) else enterGate(g) end end end, C.GOLD)
     mkBtn(GT, "Refresh Gate List", function()
         local gs = getAllGates()
         for _, g in ipairs(gs) do print("[VS] " .. g.gtype .. " | " .. g.rank .. " | " .. g.map .. " | Lv" .. g.level) end
@@ -3588,6 +3976,9 @@ do
         ["CrimsonRapier"] = 155000000,
         ["Lucy"] = 110000000,
         ["StrawHat"] = 555000000,
+        ["AncientSocrceryDress"] = 180000000,
+        ["AncientSocrceryShorts"] = 190000000,
+        ["AncientSocrceryEars"] = 120000000,
         ["AdamantLongsword"] = 300,
         ["AuthorityOfGreed"] = 5000000,
         ["BlackLongsword"] = 700,
@@ -4573,5 +4964,8 @@ task.spawn(function()
         end
     end)
 end)
+
+-- Auto-start Anti-AFK on load (always active, no toggle needed)
+startAntiAFK()
 
 print("[Void Stars] v5 Loaded — Farm | ESP | Char | Gates | Mine | Harvest | Dungeon | Raids | Misc | Trade")
